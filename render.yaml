@@ -1,0 +1,20 @@
+# Render free-tier deployment: one web service serving both the API and the
+# map UI, so there is no second origin to configure and no CORS to get wrong.
+#
+# The sample feed is generated at build time rather than committed, because
+# data/ is gitignored -- the generator is the source of truth for it. Point
+# TRANSITLAB_FEED at a real GTFS zip to serve a real network.
+services:
+  - type: web
+    name: transitlab
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -e ".[api]" && python scripts/make_sample_feed.py
+    startCommand: uvicorn transitlab.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: TRANSITLAB_FEED
+        value: data/sample-feed.zip
