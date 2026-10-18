@@ -20,6 +20,7 @@ from typing import Annotated, Literal
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ..gtfs.loader import FeedError, LoadStats, load_timetable
@@ -28,6 +29,9 @@ from ..gtfs.timetable import Timetable
 from ..routing.raptor import Journey, Raptor, TripLeg
 
 DEFAULT_FEED = Path("data/sample-feed.zip")
+# The map UI is one static page with no build step, served by this app so the
+# whole project deploys as a single service on a free tier.
+WEB_ROOT = Path(__file__).resolve().parents[3] / "web"
 
 
 # ----------------------------------------------------------------------
@@ -313,6 +317,10 @@ def create_app() -> FastAPI:
             reached=reached,
             unreachable=int(np.count_nonzero(result.best >= NEVER)),
         )
+
+    # Mounted last so it cannot shadow an API route.
+    if WEB_ROOT.is_dir():
+        app.mount("/", StaticFiles(directory=WEB_ROOT, html=True), name="web")
 
     return app
 

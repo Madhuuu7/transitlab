@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>transitlab</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #111823;
+    --panel-2: #0e141d;
+    --line: #1e2a3a;
+    --text: #e6edf6;
+    --muted: #8296ad;
+    --accent: #4cc9f0;
+    --accent-2: #f72585;
+    --ride: #4cc9f0;
+    --walk: #ffd166;
+    --ok: #06d6a0;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  #map { position: absolute; inset: 0; }
+
+  .shell {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 384px 1fr;
+    pointer-events: none;
+  }
+  .panel {
+    pointer-events: auto;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header { padding: 20px 20px 14px; border-bottom: 1px solid var(--line); }
+  h1 {
+    margin: 0;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  h1 .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(76, 201, 240, 0.15);
+  }
+  .tagline { margin: 7px 0 0; color: var(--muted); font-size: 12.5px; }
+  .tagline code { font-family: var(--mono); color: #a9bdd4; font-size: 12px; }
+
+  .tabs { display: flex; gap: 6px; padding: 14px 20px 0; }
+  .tab {
+    flex: 1;
+    padding: 8px 10px;
+    font: 600 12.5px/1 system-ui, sans-serif;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    cursor: pointer;
+    transition: color 0.18s, background 0.18s, border-color 0.18s;
+  }
+  .tab[aria-selected="true"] {
+    color: #04131b;
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .tab:hover:not([aria-selected="true"]) { color: var(--text); border-color: #2b3a4e; }
+
+  form { padding: 16px 20px 18px; display: grid; gap: 12px; }
+  label { display: grid; gap: 5px; font-size: 11.5px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+  select, input {
+    appearance: none;
+    width: 100%;
+    padding: 9px 11px;
+    font: 14px var(--mono);
+    color: var(--text);
+    background: #0a1017;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hint { font-size: 11.5px; color: var(--muted); text-transform: none; letter-spacing: 0; }
+
+  button.go {
+    padding: 11px;
+    font: 700 13.5px/1 system-ui, sans-serif;
+    letter-spacing: 0.03em;
+    color: #04131b;
+    background: var(--accent);
+    border: 0;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: filter 0.15s, transform 0.08s;
+  }
+  button.go:hover { filter: brightness(1.08); }
+  button.go:active { transform: translateY(1px); }
+  button.go[disabled] { opacity: 0.55; cursor: progress; }
+
+  .results { flex: 1; overflow-y: auto; padding: 0 20px 24px; }
+  .results::-webkit-scrollbar { width: 9px; }
+  .results::-webkit-scrollbar-thumb { background: #1b2635; border-radius: 9px; }
+
+  .summary {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 14px 0 12px; border-bottom: 1px dashed var(--line);
+  }
+  .summary .big { font: 700 26px/1 var(--mono); letter-spacing: -0.02em; }
+  .summary .meta { color: var(--muted); font-size: 12.5px; }
+
+  ol.legs { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 2px; }
+  .leg {
+    display: grid; grid-template-columns: 58px 1fr; gap: 12px;
+    padding: 10px 0; border-left: 2px solid transparent; padding-left: 10px;
+  }
+  .leg.ride { border-left-color: var(--ride); }
+  .leg.walk { border-left-color: var(--walk); border-left-style: dashed; }
+  .leg time { font: 13px var(--mono); color: var(--muted); }
+  .leg .what { font-size: 13.5px; }
+  .leg .what b { font-weight: 600; }
+  .badge {
+    display: inline-block; padding: 1px 6px; margin-right: 6px;
+    font: 700 10.5px/1.5 var(--mono); border-radius: 4px;
+    background: rgba(76, 201, 240, 0.16); color: var(--ride);
+  }
+  .leg.walk .badge { background: rgba(255, 209, 102, 0.16); color: var(--walk); }
+  .leg .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  .alt { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .alt h3 { margin: 0 0 8px; font-size: 11.5px; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+  .alt-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 9px 11px; margin-bottom: 6px;
+    background: #0a1017; border: 1px solid var(--line); border-radius: 7px;
+    font-size: 13px; cursor: pointer;
+  }
+  .alt-item:hover { border-color: #2b3a4e; }
+  .alt-item .t { font: 600 13px var(--mono); }
+
+  .bands { display: grid; gap: 7px; margin-top: 14px; }
+  .band { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+  .band i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+  .band b { color: var(--text); font: 600 12.5px var(--mono); }
+
+  .empty { padding: 26px 0; color: var(--muted); font-size: 13px; }
+  .error {
+    margin-top: 14px; padding: 11px 12px;
+    background: rgba(247, 37, 133, 0.1);
+    border: 1px solid rgba(247, 37, 133, 0.35);
+    border-radius: 7px; color: #ffb3d1; font-size: 13px;
+  }
+
+  footer {
+    padding: 11px 20px; border-top: 1px solid var(--line);
+    font: 11.5px var(--mono); color: var(--muted);
+    display: flex; justify-content: space-between; gap: 10px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  .maplibregl-popup-content {
+    background: #0e141d; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    font: 12.5px var(--mono); padding: 9px 11px;
+  }
+  .maplibregl-popup-tip { border-top-color: #0e141d !important; }
+
+  @media (max-width: 760px) {
+    .shell { grid-template-columns: 1fr; }
+    .panel { max-height: 62vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="shell">
+  <aside class="panel">
+    <header>
+      <h1><span class="dot"></span> transitlab</h1>
+      <p class="tagline">RAPTOR journey planner over GTFS. Router written from
+      scratch; <code>/journey</code> and <code>/isochrone</code> are one
+      one-to-all run each.</p>
+    </header>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-journey" aria-selected="true">Journey</button>
+      <button class="tab" role="tab" id="tab-isochrone" aria-selected="false">Isochrone</button>
+    </div>
+
+    <form id="controls">
+      <label id="field-origin">Origin
+        <select id="origin"></select>
+      </label>
+      <label id="field-destination">Destination
+        <select id="destination"></select>
+      </label>
+      <div class="row">
+        <label>Depart after
+          <input id="time" value="06:10" inputmode="numeric" />
+        </label>
+        <label id="field-change">Change (s)
+          <input id="change" value="0" inputmode="numeric" />
+        </label>
+      </div>
+      <label id="field-budget" hidden>Budget (minutes)
+        <input id="budget" value="30" inputmode="numeric" />
+      </label>
+      <button class="go" id="go" type="submit">Plan journey</button>
+      <span class="hint">Click any stop on the map to set the origin, shift-click for the destination.</span>
+    </form>
+
+    <div class="results" id="results">
+      <p class="empty">Pick two stops and plan a journey.</p>
+    </div>
+
+    <footer>
+      <span id="feedinfo">loading feed…</span>
+      <a href="/docs" target="_blank" rel="noreferrer">API docs</a>
+    </footer>
+  </aside>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // Animation is a nicety: if the CDN module is unavailable the page still
+  // works, it just does not slide anything in.
+  let animate = null;
+  import("https://cdn.jsdelivr.net/npm/motion@11.11.17/+esm")
+    .then((m) => { animate = m.animate; })
+    .catch(() => {});
+
+  const BANDS = [
+    { max: 10, color: "#06d6a0", label: "within 10 min" },
+    { max: 20, color: "#4cc9f0", label: "10 – 20 min" },
+    { max: 30, color: "#7b8cf7", label: "20 – 30 min" },
+    { max: 45, color: "#b56bf2", label: "30 – 45 min" },
+    { max: Infinity, color: "#f72585", label: "45 min +" },
+  ];
+
+  const $ = (id) => document.getElementById(id);
+  const state = { stops: [], byId: new Map(), mode: "journey", journeys: [] };
+
+  const map = new maplibregl.Map({
+    container: "map",
+    style: {
+      version: 8,
+      sources: {
+        carto: {
+          type: "raster",
+          tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
+          tileSize: 256,
+          attribution:
+            '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>, © <a href="https://carto.com/attributions">CARTO</a>',
+        },
+      },
+      layers: [{ id: "carto", type: "raster", source: "carto" }],
+    },
+    center: [77.58, 12.97],
+    zoom: 11.4,
+    attributionControl: { compact: true },
+  });
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+
+  const empty = { type: "FeatureCollection", features: [] };
+
+  map.on("load", async () => {
+    map.addSource("stops", { type: "geojson", data: empty });
+    map.addSource("route", { type: "geojson", data: empty });
+    map.addSource("endpoints", { type: "geojson", data: empty });
+
+    map.addLayer({
+      id: "route-walk",
+      type: "line",
+      source: "route",
+      filter: ["==", ["get", "kind"], "walk"],
+      paint: {
+        "line-color": "#ffd166",
+        "line-width": 3,
+        "line-dasharray": [1.5, 1.5],
+        "line-opacity": 0.95,
+      },
+    });
+    map.addLayer({
+      id: "route-ride",
+      type: "line",
+      source: "route",
+      filter: ["==", ["get", "kind"], "ride"],
+      paint: {
+        "line-color": "#4cc9f0",
+        "line-width": 4.5,
+        "line-opacity": 0.95,
+        "line-blur": 0.3,
+      },
+    });
+    map.addLayer({
+      id: "stops",
+      type: "circle",
+      source: "stops",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 3.4, 15, 7],
+        "circle-color": ["coalesce", ["get", "color"], "#5c7a99"],
+        "circle-stroke-width": 1,
+        "circle-stroke-color": "rgba(10,16,23,0.9)",
+        "circle-opacity": 0.95,
+      },
+    });
+    map.addLayer({
+      id: "endpoints",
+      type: "circle",
+      source: "endpoints",
+      paint: {
+        "circle-radius": 8,
+        "circle-color": ["get", "color"],
+        "circle-stroke-width": 2.5,
+        "circle-stroke-color": "#0b0f14",
+      },
+    });
+
+    map.on("click", "stops", (event) => {
+      const id = event.features[0].properties.stop_id;
+      const field = event.originalEvent.shiftKey ? $("destination") : $("origin");
+      field.value = id;
+      field.dispatchEvent(new Event("change"));
+      run();
+    });
+    map.on("mouseenter", "stops", () => (map.getCanvas().style.cursor = "pointer"));
+    map.on("mouseleave", "stops", () => (map.getCanvas().style.cursor = ""));
+
+    let hover = null;
+    map.on("mousemove", "stops", (event) => {
+      const p = event.features[0].properties;
+      const text = p.arrival ? `${p.name} · ${p.arrival}` : p.name;
+      if (hover) hover.remove();
+      hover = new maplibregl.Popup({ closeButton: false, offset: 12 })
+        .setLngLat(event.lngLat)
+        .setText(text)
+        .addTo(map);
+    });
+    map.on("mouseleave", "stops", () => { if (hover) { hover.remove(); hover = null; } });
+
+    await boot();
+  });
+
+  async function boot() {
+    try {
+      const [feed, stops] = await Promise.all([
+        fetch("/feed").then((r) => r.json()),
+        fetch("/stops?limit=5000").then((r) => r.json()),
+      ]);
+      state.stops = stops;
+      state.byId = new Map(stops.map((s) => [s.stop_id, s]));
+      $("feedinfo").textContent =
+        `${feed.feed} · ${feed.stops} stops · ${feed.patterns} patterns · ` +
+        `${feed.trips} trips · ${feed.stop_times} stop-times`;
+
+      for (const field of [$("origin"), $("destination")]) {
+        field.innerHTML = stops
+          .map((s) => `<option value="${s.stop_id}">${s.name} (${s.stop_id})</option>`)
+          .join("");
+      }
+      if (stops.length > 1) $("destination").value = stops[stops.length - 1].stop_id;
+
+      paintStops();
+      fitTo(stops);
+    } catch (error) {
+      showError(`could not reach the API: ${error.message}`);
+    }
+  }
+
+  function fitTo(stops) {
+    if (!stops.length) return;
+    const bounds = stops.reduce(
+      (b, s) => b.extend([s.lon, s.lat]),
+      new maplibregl.LngLatBounds([stops[0].lon, stops[0].lat], [stops[0].lon, stops[0].lat]),
+    );
+    map.fitBounds(bounds, { padding: { top: 70, right: 70, bottom: 70, left: 430 }, duration: 700 });
+  }
+
+  function paintStops(reached) {
+    const arrivals = new Map((reached || []).map((s) => [s.stop_id, s]));
+    map.getSource("stops").setData({
+      type: "FeatureCollection",
+      features: state.stops.map((s) => {
+        const hit = arrivals.get(s.stop_id);
+        const band = hit ? BANDS.find((b) => hit.minutes <= b.max) : null;
+        return {
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+          properties: {
+            stop_id: s.stop_id,
+            name: s.name,
+            color: band ? band.color : reached ? "#26303d" : "#5c7a99",
+            arrival: hit ? `${hit.arrival} (${hit.minutes} min)` : null,
+          },
+        };
+      }),
+    });
+  }
+
+  function drawJourney(journey) {
+    const features = [];
+    for (const leg of journey ? journey.legs : []) {
+      const a = state.byId.get(leg.from_stop);
+      const b = state.byId.get(leg.to_stop);
+      if (!a || !b) continue;
+      // Straight lines between stops: GTFS shapes.txt geometry is not loaded,
+      // so this shows the connection, not the road the vehicle takes.
+      features.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] },
+        properties: { kind: leg.kind },
+      });
+    }
+    map.getSource("route").setData({ type: "FeatureCollection", features });
+
+    const ends = [];
+    const first = journey && journey.legs[0];
+    const last = journey && journey.legs[journey.legs.length - 1];
+    if (first && state.byId.has(first.from_stop)) {
+      const s = state.byId.get(first.from_stop);
+      ends.push(point(s, "#06d6a0"));
+    }
+    if (last && state.byId.has(last.to_stop)) {
+      const s = state.byId.get(last.to_stop);
+      ends.push(point(s, "#f72585"));
+    }
+    map.getSource("endpoints").setData({ type: "FeatureCollection", features: ends });
+  }
+
+  const point = (stop, color) => ({
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [stop.lon, stop.lat] },
+    properties: { color },
+  });
+
+  function setMode(mode) {
+    state.mode = mode;
+    $("tab-journey").setAttribute("aria-selected", String(mode === "journey"));
+    $("tab-isochrone").setAttribute("aria-selected", String(mode === "isochrone"));
+    $("field-destination").hidden = mode !== "journey";
+    $("field-budget").hidden = mode !== "isochrone";
+    $("go").textContent = mode === "journey" ? "Plan journey" : "Draw isochrone";
+    map.getSource("route").setData(empty);
+    map.getSource("endpoints").setData(empty);
+    paintStops();
+    $("results").innerHTML =
+      mode === "journey"
+        ? '<p class="empty">Pick two stops and plan a journey.</p>'
+        : '<p class="empty">Pick an origin and a time budget.</p>';
+  }
+
+  $("tab-journey").addEventListener("click", () => setMode("journey"));
+  $("tab-isochrone").addEventListener("click", () => setMode("isochrone"));
+  $("controls").addEventListener("submit", (event) => {
+    event.preventDefault();
+    run();
+  });
+
+  async function run() {
+    const button = $("go");
+    button.disabled = true;
+    try {
+      if (state.mode === "journey") await planJourney();
+      else await drawIsochrone();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function planJourney() {
+    const params = new URLSearchParams({
+      from: $("origin").value,
+      to: $("destination").value,
+      time: $("time").value.trim(),
+      change_time: $("change").value.trim() || "0",
+    });
+    const response = await fetch(`/journey?${params}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "journey request failed");
+
+    state.journeys = [body.fastest, ...(body.alternatives || [])].filter(Boolean);
+    paintStops();
+    renderJourney(body);
+    drawJourney(body.fastest);
+  }
+
+  function renderJourney(body) {
+    const results = $("results");
+    if (!body.fastest) {
+      results.innerHTML =
+        `<p class="empty">No journey from <b>${body.origin.name}</b> to ` +
+        `<b>${body.destination.name}</b> departing ${body.requested_departure}. ` +
+        `Service may be over for the day.</p>`;
+      return;
+    }
+    const j = body.fastest;
+    results.innerHTML = `
+      <div class="summary">
+        <span class="big">${j.duration_minutes} min</span>
+        <span class="meta">${j.departure} → ${j.arrival} ·
+          ${j.transfers} transfer${j.transfers === 1 ? "" : "s"} ·
+          ${j.walk_minutes} min walking</span>
+      </div>
+      <ol class="legs">${j.legs.map(legHtml).join("")}</ol>
+      ${alternativesHtml(body.alternatives)}
+    `;
+    if (animate) {
+      animate(
+        results.querySelectorAll(".leg"),
+        { opacity: [0, 1], transform: ["translateX(-10px)", "translateX(0)"] },
+        { duration: 0.28, delay: (i) => i * 0.05, easing: "ease-out" },
+      );
+    }
+    bindAlternatives();
+  }
+
+  function legHtml(leg) {
+    if (leg.kind === "walk") {
+      return `<li class="leg walk">
+        <time>${Math.round(leg.seconds / 60)}′</time>
+        <div class="what">
+          <span class="badge">WALK</span><b>${leg.to_name}</b>
+          <div class="sub">${leg.from_name} → ${leg.to_name}</div>
+        </div></li>`;
+    }
+    return `<li class="leg ride">
+      <time>${leg.departure.slice(0, 5)}<br />${leg.arrival.slice(0, 5)}</time>
+      <div class="what">
+        <span class="badge">${leg.route_id}</span><b>${leg.to_name}</b>
+        <div class="sub">board at ${leg.from_name} · ${leg.trip_id}</div>
+      </div></li>`;
+  }
+
+  function alternativesHtml(alternatives) {
+    if (!alternatives || !alternatives.length) return "";
+    return `<div class="alt"><h3>Fewer transfers</h3>${alternatives
+      .map(
+        (a, i) => `<div class="alt-item" data-index="${i}">
+          <span>${a.transfers} transfer${a.transfers === 1 ? "" : "s"},
+            ${a.walk_minutes} min walking</span>
+          <span class="t">${a.duration_minutes} min</span>
+        </div>`,
+      )
+      .join("")}</div>`;
+  }
+
+  function bindAlternatives() {
+    for (const item of document.querySelectorAll(".alt-item")) {
+      item.addEventListener("click", () => {
+        const index = Number(item.dataset.index) + 1;
+        if (state.journeys[index]) drawJourney(state.journeys[index]);
+      });
+    }
+  }
+
+  async function drawIsochrone() {
+    const params = new URLSearchParams({
+      from: $("origin").value,
+      time: $("time").value.trim(),
+      minutes: $("budget").value.trim() || "30",
+      change_time: $("change").value.trim() || "0",
+    });
+    const response = await fetch(`/isochrone?${params}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "isochrone request failed");
+
+    map.getSource("route").setData(empty);
+    const origin = state.byId.get(body.origin.stop_id);
+    map.getSource("endpoints").setData({
+      type: "FeatureCollection",
+      features: origin ? [point(origin, "#06d6a0")] : [],
+    });
+    paintStops(body.reached);
+
+    const counts = BANDS.map(
+      (band) => body.reached.filter((s) => s.minutes <= band.max).length,
+    );
+    $("results").innerHTML = `
+      <div class="summary">
+        <span class="big">${body.reached.length}</span>
+        <span class="meta">stops reachable from ${body.origin.name}
+          within ${body.budget_minutes} min, leaving ${body.departure}</span>
+      </div>
+      <div class="bands">${BANDS.map(
+        (band, i) => `<div class="band">
+          <i style="background:${band.color}"></i>
+          <span>${band.label}</span><b>${counts[i]}</b></div>`,
+      ).join("")}</div>
+      <p class="empty">${body.unreachable} stop${body.unreachable === 1 ? "" : "s"}
+        unreachable at this departure time.</p>
+    `;
+    if (animate) {
+      animate(
+        $("results").querySelectorAll(".band"),
+        { opacity: [0, 1] },
+        { duration: 0.25, delay: (i) => i * 0.06 },
+      );
+    }
+  }
+
+  function showError(message) {
+    const existing = document.querySelector(".error");
+    if (existing) existing.remove();
+    const box = document.createElement("div");
+    box.className = "error";
+    box.textContent = message;
+    $("results").prepend(box);
+  }
+})();
+</script>
+</body>
+</html>
