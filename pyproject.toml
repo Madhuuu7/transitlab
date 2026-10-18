@@ -1,0 +1,25 @@
+[project]
+name = "transitlab"
+version = "0.1.0"
+description = "Multi-criteria public transit journey planning with a from-scratch RAPTOR router"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "duckdb>=1.0",
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
+dev = ["pytest>=8.0", "hypothesis>=6.100"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
