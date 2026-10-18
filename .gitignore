@@ -6,6 +6,10 @@ __pycache__/
 .hypothesis/
 data/*
 !data/.gitkeep
+# The Bengaluru snapshot is committed on purpose: the server cannot rebuild
+# it (ingest peaks near 1.6 GB against a 512 MB instance), and at 7.9 MB it is
+# cheaper to ship than to fetch. Terms are in ATTRIBUTION.md.
+!data/bmtc.npz
 *.duckdb
 .env
 .DS_Store

@@ -24,6 +24,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ..gtfs.loader import FeedError, LoadStats, load_timetable
+from ..gtfs.snapshot import SnapshotError
+from ..gtfs.snapshot import load as load_snapshot
 from ..gtfs.times import NEVER, format_gtfs_time, parse_gtfs_time
 from ..gtfs.timetable import Timetable
 from ..routing.raptor import Journey, Raptor, TripLeg
@@ -132,16 +134,34 @@ class Engine:
 def get_engine() -> Engine:
     """Load the feed named by ``TRANSITLAB_FEED`` once per process.
 
+    A ``.npz`` is a prebuilt snapshot and is loaded directly; anything else is
+    a GTFS feed and is ingested here. Prefer the snapshot in a deployment: a
+    city-sized feed costs seconds and over a gigabyte to ingest and 15 MB to
+    hold, so paying the ingest on every boot sizes the instance for work it
+    does once. See :mod:`transitlab.gtfs.snapshot`.
+
     ``TRANSITLAB_WALK_RADIUS_M`` adds walking transfers between stops within
     that many metres. It is needed on any feed that ships no ``transfers.txt``
     -- without it the router cannot cross a road, which on a feed that models
     each direction of a street as its own stop produces journeys with
-    absurd numbers of changes. See :mod:`transitlab.gtfs.footpaths`.
+    absurd numbers of changes. It applies to ingest only; a snapshot already
+    has whatever walking graph it was built with.
     """
     feed = Path(os.environ.get("TRANSITLAB_FEED", str(DEFAULT_FEED)))
     date = os.environ.get("TRANSITLAB_DATE") or None
     radius = float(os.environ.get("TRANSITLAB_WALK_RADIUS_M") or 0) or None
     stats = LoadStats()
+
+    if feed.suffix == ".npz":
+        try:
+            timetable = load_snapshot(feed)
+        except (SnapshotError, OSError) as exc:  # pragma: no cover - startup path
+            raise RuntimeError(f"could not load snapshot {feed}: {exc}") from exc
+        stats.stops = timetable.n_stops
+        stats.patterns = timetable.n_patterns
+        stats.stop_times = timetable.n_stop_times
+        return Engine(timetable, feed.name, stats)
+
     try:
         timetable = load_timetable(feed, date=date, walk_radius_m=radius, stats=stats)
     except FeedError as exc:  # pragma: no cover - startup failure path
