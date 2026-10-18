@@ -56,9 +56,13 @@ with `string_agg(stop_id ORDER BY stop_sequence)` per trip. Grouping by
 `route_id` instead breaks the algorithm's assumption that any trip of a route
 can be boarded at any of its stops.
 
-**Binary search over a strided view.** The earliest boardable trip comes from
-`np.searchsorted` over `departures[base+i : base+T*L : L]` — a stride-`L`
-view, so no allocation and no Python loop over trips. Valid only under the
+**Trip lookup by linear scan, not binary search.** This one was a mistake,
+corrected by real data — see [What real data changed](#what-real-data-changed).
+The earliest boardable trip is read from `departures[base+i : base+T*L : L]`,
+a stride-`L` column. Searching it with `np.searchsorted` is right when a
+pattern has many trips and badly wrong when it has two, which is the real
+case. Below 24 trips the column is scanned in a Python loop over an `int32`
+memoryview; above it, `searchsorted`. Either way the lookup depends on the
 non-overtaking invariant, which the loader *verifies* and, where a feed
 violates it (an express sharing a stop sequence with a local), repairs by
 splitting the pattern into bands.
@@ -103,9 +107,88 @@ Both have named regression tests. Journeys are additionally re-derived leg by
 leg from the timetable, rather than trusted because the router emitted them.
 
 ```
-75 tests: times, CSR index arithmetic, closure vs Floyd–Warshall, loader
-quirks, RAPTOR vs reference, API contract
+108 tests: times, CSR index arithmetic, closure vs Floyd–Warshall, loader
+quirks, RAPTOR vs reference, generated footpaths vs brute-force all-pairs,
+snapshot round-trips, API contract
 ```
+
+## What real data changed
+
+Everything above was built and benchmarked against generated feeds. Then the
+real [BMTC feed for Bengaluru](ATTRIBUTION.md) went in — 9,948 stops, 7,838
+patterns, 1.54 million stop-times — and it is worth being specific about what
+survived contact and what did not.
+
+**It loaded with no code changes**, which is the one part that went well. The
+defensive quirk handling all earned its keep: 121 trips dropped for unusable
+times, string stop ids like `20921_PF5`, non-standard column order, no
+`calendar_dates.txt`, and **365 patterns split because real buses genuinely
+overtake each other** — an edge case that had only ever been exercised by a
+test I wrote by hand.
+
+Three things were wrong.
+
+**1. The feed declares no walking transfers, and that changes answers.**
+`transfers.txt` is absent, so the router could only change buses where two
+patterns shared an identical `stop_id`. Agencies model each direction of a
+road as its own stop — 9,960 ids over 5,211 distinct names here — so roughly
+half of all stops are one side of a street whose other side is a separate id
+40–80 m away. Forbidding that crossing does not trim the options, it reroutes
+the answer:
+
+| 08:00 departure | no footpaths | generated footpaths |
+|---|---|---|
+| Majestic → Shivajinagara | 27 min, 3 changes | **16 min, 1 change** |
+| Majestic → Electronic City | 45 min, 2 changes | **38 min, 1 change** |
+| Banashankari → Electronic City | 121 min, 5 changes | **53 min, 2 changes** |
+| stops reachable in 60 min, random origin | 48 | **869** |
+
+So `gtfs/footpaths.py` infers the walking graph from coordinates when a feed
+is silent: stops bucketed into a grid of cell size equal to the search radius,
+nine cells searched instead of all pairs, 0.02 s for 9,948 stops rather than
+99 million distance computations. It is checked against a brute-force
+all-pairs implementation, because a wrong grid offset would silently drop
+boundary-straddling pairs and merely leave a feed slightly less connected.
+The generated times are an estimate and say so: straight line, 1.4 detour
+factor, 1.25 m/s, 60-second floor, no knowledge of whether a crossing exists.
+
+**2. The binary search was the wrong trade, and the synthetic benchmark could
+not have shown it.** The README used to advertise `np.searchsorted` over the
+strided departure column. In this feed the **median pattern has 2 trips** and
+74% have four or fewer — a pattern is a distinct stop sequence, and a bus
+route runs a handful of variants rather than one sequence at a regular
+headway. Every lookup was paying a slice object and a NumPy dispatch, several
+microseconds, to binary-search two elements. The generated feeds gave every
+pattern a regular headway and dozens of trips, which is precisely the shape
+that hides this.
+
+```
+one-to-all over all 9,948 stops:   5.0 s  ->  1.4 s   (3.5x)
+```
+
+What remains is the interpreter in the round loop itself, which needs
+vectorisation or a compiled kernel rather than a cheaper accessor. The
+differential suite against the Dijkstra oracle passes unchanged, which is the
+only reason a hot-path rewrite like this is defensible at all.
+
+**3. It could not be deployed, for a reason that had nothing to do with
+routing.** Ingest peaks near **1.6 GB** resident and takes 15 s, to produce
+**15.4 MB** of flat arrays. A free instance has 512 MB, so the server could
+not build a city it can serve with room to spare. Ingest is now a build step:
+`gtfs/snapshot.py` writes the finished arrays and reads them back with no
+DuckDB, no CSV parsing and no intermediate Python objects.
+
+```
+startup        15.0 s  ->  0.14 s   (107x)
+steady memory   976 MB ->   96 MB   (10x)
+peak memory    1588 MB ->  100 MB   (16x)
+data shipped     44 MB ->  7.9 MB
+```
+
+The honest summary: the algorithm and the data structures held up, the
+*benchmark* did not. A synthetic feed built to be convenient was convenient in
+exactly the ways that flattered the implementation, and two of the three
+problems above were invisible until a real agency's data went through it.
 
 ## Run it
 
@@ -113,12 +196,36 @@ quirks, RAPTOR vs reference, API contract
 python -m venv .venv && .venv/Scripts/pip install -e ".[api,dev]"
 
 python scripts/make_sample_feed.py          # writes data/sample-feed.zip
-python -m pytest                            # 75 tests
+python -m pytest                            # 108 tests
 uvicorn transitlab.api.app:app --reload     # http://127.0.0.1:8000
 ```
 
-Point it at a real feed with `TRANSITLAB_FEED=path/to/feed.zip` and
-`TRANSITLAB_DATE=20260115`.
+### Running the real Bengaluru network
+
+`data/bmtc.npz` ships with the repo, so this needs no download:
+
+```sh
+TRANSITLAB_FEED=data/bmtc.npz uvicorn transitlab.api.app:app
+```
+
+9,948 stops, 1.54 M stop-times, 0.14 s to start, 96 MB resident. Try
+`/journey?from=20921&to=21933&time=08:00:00` — Majestic to Electronic City —
+or `/isochrone?from=20921&minutes=30`, which reaches 1,891 stops.
+
+### Any other feed
+
+| variable | what |
+|---|---|
+| `TRANSITLAB_FEED` | a GTFS zip or directory, or a `.npz` snapshot |
+| `TRANSITLAB_DATE` | `20260115` — keep only services running that day |
+| `TRANSITLAB_WALK_RADIUS_M` | `250` — generate footpaths; needed if the feed has no `transfers.txt` |
+
+A city-sized feed should be ingested once and served from a snapshot, not
+re-ingested on every boot:
+
+```sh
+python scripts/make_snapshot.py path/to/feed.zip data/city.npz --walk-radius 250
+```
 
 ### API
 
@@ -129,6 +236,9 @@ Point it at a real feed with `TRANSITLAB_FEED=path/to/feed.zip` and
 | `GET /stops?q=` | stop list, name-filtered |
 | `GET /feed` | loaded feed summary |
 | `GET /docs` | OpenAPI UI |
+
+Journey queries on the full Bengaluru network take ~0.6 s; a one-to-all
+isochrone over all 9,948 stops takes ~1.4 s. Both are pure Python.
 
 ### The sample feed
 
@@ -148,6 +258,17 @@ larger networks for property tests and benchmarks.
   `shapes.txt` geometry is not loaded.
 - Blank intermediate stop times are filled from their partner field rather
   than interpolated along the trip.
+- Queries are pure Python and cost hundreds of milliseconds on a city-sized
+  network. The remaining cost is the interpreter in the round loop, so going
+  faster means vectorising the pattern scan or dropping to a compiled kernel,
+  not tuning accessors.
+- Generated footpaths are straight-line estimates. They do not know whether a
+  crossing, a footway or a flyover is in the way, and they will cheerfully
+  walk you across a six-lane road. A feed's own `transfers.txt` always wins.
+- The shipped Bengaluru data is an **unofficial** feed whose timetables are
+  known to be approximate, and it only contains routes with working live
+  tracking. See [ATTRIBUTION.md](ATTRIBUTION.md). Good enough to prove the
+  router works at real scale; not travel advice.
 
 ## Layout
 
@@ -157,9 +278,11 @@ src/transitlab/
   gtfs/synthetic.py    deterministic feed generators that emit real zips
   gtfs/timetable.py    flat CSR arrays + bounded footpath closure
   gtfs/loader.py       DuckDB ingest, pattern extraction, overtaking split
+  gtfs/footpaths.py    walking transfers from geography, grid-bucketed
+  gtfs/snapshot.py     built timetables saved and reloaded, versioned
   routing/raptor.py    the router, journey reconstruction, isochrones
   routing/reference.py time-expanded Dijkstra oracle and baseline
   api/app.py           FastAPI endpoints
 web/index.html         MapLibre UI, no build step
-scripts/               sample feed, benchmark
+scripts/               sample feed, snapshot builder, benchmark
 ```
