@@ -263,7 +263,10 @@ def create_app() -> FastAPI:
     def stops(
         engine: EngineDep,
         q: str | None = Query(None, description="case-insensitive name filter"),
-        limit: int = Query(500, ge=1, le=5000),
+        # The ceiling has to clear a whole city, not a sample of one: the map
+        # plots every stop at once, and a cap below the feed's stop count
+        # silently draws a partial network. Bengaluru alone has 9,948.
+        limit: int = Query(500, ge=1, le=50_000),
     ) -> list[StopOut]:
         needle = q.lower() if q else None
         out: list[StopOut] = []

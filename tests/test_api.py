@@ -112,3 +112,16 @@ def test_openapi_schema_is_served(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     assert "/journey" in schema["paths"]
     assert "/isochrone" in schema["paths"]
+
+
+def test_stops_limit_clears_a_whole_city(client) -> None:
+    """A cap below the feed's stop count draws a partial network, silently.
+
+    The UI plots every stop at once, so this is the regression test for the
+    5,000 ceiling that was quietly truncating a 9,948-stop feed.
+    """
+    response = client.get("/stops", params={"limit": 12_000})
+    assert response.status_code == 200
+
+    feed = client.get("/feed").json()
+    assert len(response.json()) == feed["stops"]
