@@ -38,7 +38,7 @@ every later position, raising :class:`OvertakingError` if the invariant fails.
 from __future__ import annotations
 
 import heapq
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Iterator, Sequence
 
 import numpy as np
@@ -47,6 +47,34 @@ import numpy as np
 # connect every stop to every other through a chain of short hops, which is
 # both wrong (nobody walks 3 km between buses) and quadratic in memory.
 MAX_FOOTPATH_SECONDS: int = 900
+
+#: Trip count at or below which :meth:`Timetable.earliest_trip` scans linearly
+#: instead of binary-searching.
+#:
+#: Binary search wins on asymptotics and loses badly on constants at this size.
+#: ``np.searchsorted`` over a strided view costs a slice object plus a NumPy
+#: dispatch -- several microseconds -- regardless of how few elements it then
+#: looks at, while a Python loop over a memoryview costs tens of nanoseconds
+#: per element.
+#:
+#: The threshold matters because real feeds are shaped nothing like the
+#: synthetic ones this was first benchmarked on. A generated feed gives every
+#: pattern a regular headway and so dozens of trips; in the BMTC feed for
+#: Bengaluru the **median pattern has 2 trips** and 74% have four or fewer,
+#: because a pattern is a distinct stop sequence and most bus routes run a
+#: handful of distinct variants. Binary search was the wrong trade on the data
+#: the router actually sees, which the synthetic benchmark could not reveal.
+LINEAR_SCAN_TRIPS: int = 24
+
+
+def _int32_view(array: np.ndarray) -> memoryview:
+    """A flat int32 memoryview over ``array``, for cheap scalar reads.
+
+    The memoryview keeps the underlying buffer alive, so the array it is taken
+    from does not need to be stored separately.
+    """
+    contiguous = np.ascontiguousarray(array, dtype=np.int32)
+    return memoryview(contiguous).cast("B").cast("i")
 
 
 class OvertakingError(ValueError):
@@ -118,6 +146,38 @@ class Timetable:
     footpath_target: np.ndarray  # int32
     footpath_time: np.ndarray  # int32
 
+    # --- scalar read caches, derived; not part of the value -------------
+    # The RAPTOR inner loop asks for a pattern's length, trip count and base
+    # offset millions of times per query, and reads individual stop times
+    # about as often. Every one of those from an int32 NumPy array pays a
+    # scalar unbox; from a Python list or an int32 memoryview it is an
+    # ordinary indexing operation an order of magnitude cheaper. The arrays
+    # remain the source of truth -- these are built once per feed from them.
+    _length: tuple[int, ...] = field(init=False, repr=False, compare=False)
+    _trips: tuple[int, ...] = field(init=False, repr=False, compare=False)
+    _base: tuple[int, ...] = field(init=False, repr=False, compare=False)
+    _dep: memoryview = field(init=False, repr=False, compare=False)
+    _arr: memoryview = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        stop_offsets = self.pattern_stop_offset.tolist()
+        trip_offsets = self.pattern_trip_offset.tolist()
+        set_ = lambda name, value: object.__setattr__(self, name, value)  # noqa: E731
+        set_("_length", tuple(
+            stop_offsets[p + 1] - stop_offsets[p] for p in range(len(stop_offsets) - 1)
+        ))
+        set_("_trips", tuple(
+            trip_offsets[p + 1] - trip_offsets[p] for p in range(len(trip_offsets) - 1)
+        ))
+        set_("_base", tuple(self.stop_time_offset.tolist()))
+        # An int32 buffer already exposes format 'i', but a non-contiguous or
+        # differently-typed array would not, and memoryview.cast refuses to go
+        # directly between two non-byte formats -- hence the trip through 'B'.
+        # Asking for contiguity keeps a hand-built Timetable from failing
+        # somewhere less obvious than here.
+        set_("_dep", _int32_view(self.departures))
+        set_("_arr", _int32_view(self.arrivals))
+
     # ------------------------------------------------------------------
     # sizes
     # ------------------------------------------------------------------
@@ -138,10 +198,10 @@ class Timetable:
         return int(self.arrivals.size)
 
     def pattern_length(self, pattern: int) -> int:
-        return int(self.pattern_stop_offset[pattern + 1] - self.pattern_stop_offset[pattern])
+        return self._length[pattern]
 
     def trip_count(self, pattern: int) -> int:
-        return int(self.pattern_trip_offset[pattern + 1] - self.pattern_trip_offset[pattern])
+        return self._trips[pattern]
 
     # ------------------------------------------------------------------
     # views (no copies)
@@ -163,31 +223,48 @@ class Timetable:
         ascending because of the non-overtaking invariant, which is what makes
         the binary search in :meth:`earliest_trip` legal.
         """
-        base = int(self.stop_time_offset[pattern]) + position
-        length = self.pattern_length(pattern)
-        trips = self.trip_count(pattern)
+        base = self._base[pattern] + position
+        length = self._length[pattern]
+        trips = self._trips[pattern]
         return self.departures[base : base + trips * length : length]
 
     def arrival_column(self, pattern: int, position: int) -> np.ndarray:
-        base = int(self.stop_time_offset[pattern]) + position
-        length = self.pattern_length(pattern)
-        trips = self.trip_count(pattern)
+        base = self._base[pattern] + position
+        length = self._length[pattern]
+        trips = self._trips[pattern]
         return self.arrivals[base : base + trips * length : length]
 
     def earliest_trip(self, pattern: int, position: int, time: int) -> int:
         """Index of the first trip of ``pattern`` departing ``position`` at or
-        after ``time``; ``-1`` if the service day is over for that pattern."""
-        column = self.departure_column(pattern, position)
+        after ``time``; ``-1`` if the service day is over for that pattern.
+
+        Both branches rely on the non-overtaking invariant: departures down a
+        position are ascending in trip order, so the first hit is the earliest.
+        See :data:`LINEAR_SCAN_TRIPS` for why the short case does not binary
+        search.
+        """
+        length = self._length[pattern]
+        trips = self._trips[pattern]
+        base = self._base[pattern] + position
+
+        if trips <= LINEAR_SCAN_TRIPS:
+            departures = self._dep
+            index = base
+            for trip in range(trips):
+                if departures[index] >= time:
+                    return trip
+                index += length
+            return -1
+
+        column = self.departures[base : base + trips * length : length]
         hit = int(np.searchsorted(column, time, side="left"))
-        return hit if hit < column.size else -1
+        return hit if hit < trips else -1
 
     def arrival_at(self, pattern: int, trip: int, position: int) -> int:
-        length = self.pattern_length(pattern)
-        return int(self.arrivals[int(self.stop_time_offset[pattern]) + trip * length + position])
+        return self._arr[self._base[pattern] + trip * self._length[pattern] + position]
 
     def departure_at(self, pattern: int, trip: int, position: int) -> int:
-        length = self.pattern_length(pattern)
-        return int(self.departures[int(self.stop_time_offset[pattern]) + trip * length + position])
+        return self._dep[self._base[pattern] + trip * self._length[pattern] + position]
 
     def trip_id_of(self, pattern: int, trip: int) -> str:
         return self.trip_ids[int(self.pattern_trip_offset[pattern]) + trip]
