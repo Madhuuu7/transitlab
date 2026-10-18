@@ -130,12 +130,20 @@ class Engine:
 
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
-    """Load the feed named by ``TRANSITLAB_FEED`` once per process."""
+    """Load the feed named by ``TRANSITLAB_FEED`` once per process.
+
+    ``TRANSITLAB_WALK_RADIUS_M`` adds walking transfers between stops within
+    that many metres. It is needed on any feed that ships no ``transfers.txt``
+    -- without it the router cannot cross a road, which on a feed that models
+    each direction of a street as its own stop produces journeys with
+    absurd numbers of changes. See :mod:`transitlab.gtfs.footpaths`.
+    """
     feed = Path(os.environ.get("TRANSITLAB_FEED", str(DEFAULT_FEED)))
     date = os.environ.get("TRANSITLAB_DATE") or None
+    radius = float(os.environ.get("TRANSITLAB_WALK_RADIUS_M") or 0) or None
     stats = LoadStats()
     try:
-        timetable = load_timetable(feed, date=date, stats=stats)
+        timetable = load_timetable(feed, date=date, walk_radius_m=radius, stats=stats)
     except FeedError as exc:  # pragma: no cover - startup failure path
         raise RuntimeError(f"could not load {feed}: {exc}") from exc
     return Engine(timetable, feed.name, stats)

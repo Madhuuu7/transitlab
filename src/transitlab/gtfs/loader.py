@@ -44,6 +44,7 @@ from typing import Iterable, Sequence
 
 import duckdb
 
+from .footpaths import generate_footpaths
 from .timetable import (
     MAX_FOOTPATH_SECONDS,
     RawPattern,
@@ -92,14 +93,18 @@ class LoadStats:
     patterns_split: int = 0
     stop_times: int = 0
     footpaths_declared: int = 0
+    footpaths_generated: int = 0
 
     def __str__(self) -> str:
+        walking = f"{self.footpaths_declared} declared footpaths"
+        if self.footpaths_generated:
+            walking += f" + {self.footpaths_generated} generated from geography"
         return (
             f"{self.stops} stops, {self.trips_read} trips "
             f"({self.trips_dropped} dropped), {self.patterns} patterns "
             f"({self.patterns_split} from splitting overtaken ones), "
             f"{self.stop_times} stop-times, "
-            f"{self.footpaths_declared} declared footpaths"
+            f"{walking}"
         )
 
 
@@ -109,6 +114,7 @@ def load_timetable(
     service_ids: Iterable[str] | None = None,
     date: str | None = None,
     max_footpath_seconds: int = MAX_FOOTPATH_SECONDS,
+    walk_radius_m: float | None = None,
     stats: LoadStats | None = None,
 ) -> Timetable:
     """Read a GTFS zip or directory and return the flat timetable.
@@ -118,6 +124,14 @@ def load_timetable(
     overrides that with an explicit set. With neither, every trip in the feed
     is loaded, which is what the tests and benchmarks want but is wrong for a
     real query -- a feed holds weekday, Saturday and Sunday service at once.
+
+    ``walk_radius_m`` adds walking transfers between stops within that many
+    straight-line metres, on top of whatever ``transfers.txt`` declares. It is
+    opt-in and off by default, because inventing edges that an agency did not
+    publish is a modelling decision the caller should make knowingly -- but it
+    is close to mandatory on a feed that declares no transfers at all, where
+    the router is otherwise forbidden from crossing a road. See
+    :mod:`transitlab.gtfs.footpaths`.
     """
     stats = stats if stats is not None else LoadStats()
 
@@ -133,6 +147,15 @@ def load_timetable(
             footpaths = _read_transfers(con, stats)
         finally:
             con.close()
+
+    if walk_radius_m:
+        generated = generate_footpaths(
+            stops,
+            radius_m=walk_radius_m,
+            exclude=[(a, b) for a, b, _ in footpaths],
+        )
+        stats.footpaths_generated = len(generated)
+        footpaths = [*footpaths, *generated]
 
     stop_ids = {s.stop_id for s in stops}
     patterns = [p for p in patterns if all(s in stop_ids for s in p.stops)]
