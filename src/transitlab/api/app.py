@@ -62,6 +62,9 @@ class LegOut(BaseModel):
     departure: str | None = None
     arrival: str | None = None
     route_id: str | None = None
+    #: The number on the bus. route_id is the feed's internal key and is
+    #: not it; see Timetable.pattern_route_name.
+    route_name: str | None = None
     trip_id: str | None = None
     seconds: int
 
@@ -195,6 +198,7 @@ def _leg_out(engine: Engine, leg: object) -> LegOut:
             departure=format_gtfs_time(leg.departure),
             arrival=format_gtfs_time(leg.arrival),
             route_id=leg.route_id,
+            route_name=leg.route_name,
             trip_id=leg.trip_id,
             seconds=leg.duration,
         )

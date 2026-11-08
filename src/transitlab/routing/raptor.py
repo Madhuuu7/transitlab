@@ -63,6 +63,7 @@ class TripLeg:
     """A ride on one vehicle, boarding and alighting at given stops."""
 
     route_id: str
+    route_name: str
     trip_id: str
     from_stop: str
     to_stop: str
@@ -76,7 +77,7 @@ class TripLeg:
     def __str__(self) -> str:
         return (
             f"{format_gtfs_time(self.departure)} {self.from_stop} "
-            f"--{self.route_id}--> {self.to_stop} {format_gtfs_time(self.arrival)}"
+            f"--{self.route_name}--> {self.to_stop} {format_gtfs_time(self.arrival)}"
         )
 
 
@@ -251,6 +252,7 @@ class RaptorResult:
             departure = tt.departure_at(pattern, trip, board)
             yield TripLeg(
                 route_id=tt.pattern_route_id[pattern],
+                route_name=tt.pattern_route_name[pattern],
                 trip_id=tt.trip_id_of(pattern, trip),
                 from_stop=tt.stops[source].stop_id,
                 to_stop=tt.stops[stop].stop_id,

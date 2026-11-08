@@ -75,16 +75,15 @@ export function JourneyResult({
               <span className="leg__stop">{leg.from_name}</span>
               <span className="leg__detail">
                 {/*
-                  No bus number here, which is the honest reading of this
-                  feed. Its route ids are internal numerics -- 1000, 1001 --
-                  because the loader takes trips.route_id and never joins
-                  routes.txt, where route_short_name holds the number that is
-                  actually painted on the bus. Printing "2130" on a plaque
-                  would look like a bus number and not be one. See the README.
+                  The plaque is route_name, never route_id. The id is the
+                  feed's internal key ("2130"); the name is what is painted
+                  on the front of the bus ("VW-226KBS"), and only one of
+                  those helps anyone board.
                 */}
                 {leg.kind === "ride" ? (
                   <>
-                    Ride {Math.max(1, Math.round(leg.seconds / 60))} min to {leg.to_name}
+                    <span className="plaque">{leg.route_name}</span>{" "}
+                    {Math.max(1, Math.round(leg.seconds / 60))} min to {leg.to_name}
                   </>
                 ) : (
                   <>

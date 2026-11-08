@@ -11,7 +11,7 @@
 
 import { Timetable, type Stop } from "./timetable.ts";
 
-export const BUNDLE_VERSION = 1;
+export const BUNDLE_VERSION = 2;
 
 export interface ArraySpec {
   name: string;
@@ -49,6 +49,7 @@ export interface BundleStrings {
   stop_ids: string[];
   stop_names: string[];
   pattern_route_id: string[];
+  pattern_route_name: string[];
   trip_ids: string[];
 }
 
@@ -176,6 +177,7 @@ export function decodeBundle(
     stops,
     coords,
     patternRouteId: strings.pattern_route_id,
+    patternRouteName: strings.pattern_route_name,
     patternStopOffset,
     patternStops: required<Int32Array>(raw, "pattern_stops"),
     patternTripOffset,

@@ -30,6 +30,7 @@ import type { Timetable } from "./timetable.ts";
 export interface TripLeg {
   kind: "ride";
   routeId: string;
+  routeName: string;
   tripId: string;
   fromStop: number;
   toStop: number;
@@ -265,6 +266,7 @@ export class RaptorResult {
       legs.push({
         kind: "ride",
         routeId: tt.patternRouteId[pattern],
+        routeName: tt.patternRouteName[pattern],
         tripId: tt.tripIdOf(pattern, trip),
         fromStop: source,
         toStop: stop,

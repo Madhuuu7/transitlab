@@ -14,7 +14,8 @@ from an unofficial GTFS dataset for BMTC bus services.
 | **Source licence** | Open Database License (ODbL) v1.0 |
 | **Transit authority / operator** | Bengaluru Metropolitan Transport Corporation (BMTC) |
 | **Feed validity** | 2026-09-07 to 2027-09-07 (`feed_info.txt`) |
-| **Built with** | `scripts/make_snapshot.py data/bmtc.zip data/bmtc.npz --walk-radius 250` |
+| **Feed version** | `20260907` — pin this, not "latest"; upstream regenerates |
+| **Built with** | `scripts/make_snapshot.py data/upstream/bmtc.zip data/bmtc.npz --walk-radius 250` |
 
 `web/public/feed/` holds the same timetable re-encoded for the browser (see
 `src/transitlab/gtfs/webbundle.py`). It carries no data the snapshot does not

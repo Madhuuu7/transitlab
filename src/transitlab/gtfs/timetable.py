@@ -103,6 +103,11 @@ class RawPattern:
     trip_ids: list[str]
     arrivals: list[list[int]]
     departures: list[list[int]]
+    #: ``route_short_name`` where the feed has one. Defaults to empty, and
+    #: :func:`build_timetable` then falls back to the id, so a feed without
+    #: route names still produces a timetable that can name its routes
+    #: somehow rather than one with a blank where the bus number goes.
+    route_name: str = ""
 
     def __post_init__(self) -> None:
         if len(self.stops) < 2:
@@ -128,6 +133,17 @@ class Timetable:
 
     # --- patterns -------------------------------------------------------
     pattern_route_id: tuple[str, ...]
+    #: The number painted on the bus, from ``routes.txt``'s
+    #: ``route_short_name``, falling back to the long name and then to the id.
+    #:
+    #: Separate from ``pattern_route_id`` because the two answer different
+    #: questions and a feed makes them look alike. The id is an internal key
+    #: -- in the BMTC feed it is "3447" -- and patterns must be grouped by it,
+    #: because two routes can share a number while running different stop
+    #: sequences. The name is what a passenger needs in order to board, and it
+    #: survives the overtaking split, where an id gains a ``#1`` suffix that
+    #: nobody should ever be shown.
+    pattern_route_name: tuple[str, ...]
     pattern_stop_offset: np.ndarray  # (P + 1,) int32, into pattern_stops
     pattern_stops: np.ndarray  # (sum L_p,) int32, stop indices in order
     pattern_trip_offset: np.ndarray  # (P + 1,) int32, into trip_ids
@@ -328,10 +344,12 @@ def build_timetable(
     arrivals = np.zeros(int(stop_time_offset[-1]), dtype=np.int32)
     departures = np.zeros(int(stop_time_offset[-1]), dtype=np.int32)
     route_ids: list[str] = []
+    route_names: list[str] = []
     trip_ids: list[str] = []
 
     for p, raw in enumerate(patterns):
         route_ids.append(raw.route_id)
+        route_names.append(raw.route_name or raw.route_id)
         length = len(raw.stops)
         try:
             pattern_stops[pattern_stop_offset[p] : pattern_stop_offset[p + 1]] = [
@@ -370,6 +388,7 @@ def build_timetable(
         stop_index=stop_index,
         coords=coords,
         pattern_route_id=tuple(route_ids),
+        pattern_route_name=tuple(route_names),
         pattern_stop_offset=pattern_stop_offset,
         pattern_stops=pattern_stops,
         pattern_trip_offset=pattern_trip_offset,
@@ -556,9 +575,14 @@ def timetable_from_feed(feed, *, max_footpath_seconds: int = MAX_FOOTPATH_SECOND
                     dep.append(clock)
             arrivals.append(arr)
             departures.append(dep)
+        # feed.routes maps route_id -> (short name, long name), the same two
+        # columns the loader reads out of routes.txt, so this shortcut names
+        # its routes exactly as the zip path would.
+        short, long = feed.routes.get(pattern.route_id, ("", ""))
         raw_patterns.append(
             RawPattern(
                 route_id=pattern.route_id,
+                route_name=short.strip() or long.strip() or pattern.route_id,
                 stops=list(pattern.stops),
                 trip_ids=trip_ids,
                 arrivals=arrivals,

@@ -41,6 +41,7 @@ def test_stops_round_trip_with_ids_names_and_coordinates(sample, tmp_path) -> No
 def test_string_tables_round_trip(sample, tmp_path) -> None:
     restored = round_trip(sample, tmp_path)
     assert restored.pattern_route_id == sample.pattern_route_id
+    assert restored.pattern_route_name == sample.pattern_route_name
     assert restored.trip_ids == sample.trip_ids
 
 

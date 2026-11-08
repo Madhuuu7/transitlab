@@ -31,6 +31,8 @@ export class Timetable {
   readonly coords: Float64Array;
 
   readonly patternRouteId: string[];
+  /** The number on the bus: route_short_name, not the feed's internal id. */
+  readonly patternRouteName: string[];
   readonly patternStopOffset: Int32Array;
   readonly patternStops: Int32Array;
   readonly patternTripOffset: Int32Array;
@@ -55,6 +57,7 @@ export class Timetable {
     stops: Stop[];
     coords: Float64Array;
     patternRouteId: string[];
+    patternRouteName: string[];
     patternStopOffset: Int32Array;
     patternStops: Int32Array;
     patternTripOffset: Int32Array;
@@ -72,6 +75,7 @@ export class Timetable {
     this.stops = fields.stops;
     this.coords = fields.coords;
     this.patternRouteId = fields.patternRouteId;
+    this.patternRouteName = fields.patternRouteName;
     this.patternStopOffset = fields.patternStopOffset;
     this.patternStops = fields.patternStops;
     this.patternTripOffset = fields.patternTripOffset;

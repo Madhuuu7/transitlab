@@ -43,7 +43,7 @@ import numpy as np
 from .timetable import Stop, Timetable
 
 #: Bumped whenever the meaning or layout of the stored arrays changes.
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 
 #: Arrays stored verbatim, with the dtype each must come back as. The dtypes
 #: are restated here rather than trusted from the file so that a snapshot
@@ -80,6 +80,7 @@ def save(timetable: Timetable, path: str | Path) -> Path:
             "stop_ids": [s.stop_id for s in timetable.stops],
             "stop_names": [s.name for s in timetable.stops],
             "pattern_route_id": list(timetable.pattern_route_id),
+            "pattern_route_name": list(timetable.pattern_route_name),
             "trip_ids": list(timetable.trip_ids),
         },
         separators=(",", ":"),
@@ -137,6 +138,7 @@ def load(path: str | Path) -> Timetable:
         stops=stops,
         stop_index={s.stop_id: i for i, s in enumerate(stops)},
         pattern_route_id=tuple(metadata["pattern_route_id"]),
+        pattern_route_name=tuple(metadata["pattern_route_name"]),
         trip_ids=tuple(metadata["trip_ids"]),
         **arrays,
     )

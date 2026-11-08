@@ -162,3 +162,26 @@ def test_the_built_console_is_served_at_the_root_when_present(
     response = client.get("/")
     assert response.status_code == 200
     assert "console" in response.text
+
+
+def test_a_ride_leg_names_the_bus_as_well_as_the_route_id(client) -> None:
+    """A passenger needs the number on the bus, which is not the route_id.
+
+    In the sample feed the two are deliberately different -- route_id "BLUE",
+    route_short_name "1" -- so this cannot pass by them being the same string.
+    """
+    response = client.get("/journey", params={"from": "S0", "to": "S3"})
+    assert response.status_code == 200
+    rides = [leg for leg in response.json()["fastest"]["legs"] if leg["kind"] == "ride"]
+    assert rides, "expected at least one ride leg"
+    for leg in rides:
+        assert leg["route_name"]
+        assert leg["route_name"] != leg["route_id"]
+
+
+def test_a_walk_leg_has_no_bus_number(client) -> None:
+    response = client.get("/journey", params={"from": "S0", "to": "S3"})
+    for leg in response.json()["fastest"]["legs"]:
+        if leg["kind"] == "walk":
+            assert leg["route_name"] is None
+            assert leg["route_id"] is None

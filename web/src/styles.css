@@ -439,6 +439,7 @@ select {
    shown on the front of the bus. */
 .plaque {
   display: inline-block;
+  white-space: nowrap;
   padding: 1px 6px;
   border-radius: 2px;
   background: var(--track, var(--ice));

@@ -98,6 +98,7 @@ def test_stops_strings_and_index_round_trip() -> None:
     restored = round_trip(original)
     assert restored.stops == original.stops
     assert restored.pattern_route_id == original.pattern_route_id
+    assert restored.pattern_route_name == original.pattern_route_name
     assert restored.trip_ids == original.trip_ids
     assert restored.stop_index == original.stop_index
 

@@ -15,7 +15,7 @@ time-expanded Dijkstra, and benchmarks it against that same baseline.
  GTFS zip ──► DuckDB ingest ──► flat CSR arrays ──► RAPTOR ──► FastAPI
               patterns, times   offset[p]+trip*L+i   rounds     journeys
                                         │
-                                        └──► 1.9 MB bundle ──► the same RAPTOR,
+                                        └──► 1.93 MB bundle ─► the same RAPTOR,
                                                                in the browser
 ```
 
@@ -101,7 +101,7 @@ Three things had to be *made* to agree rather than assumed to:
 
 A snapshot is the right shape to load from disk and the wrong shape to send to
 a browser. Two properties of the real feed, both measured by the encoder rather
-than assumed, take 7.86 MB to **1.90 MB**:
+than assumed, take 7.90 MB to **1.93 MB**:
 
 - **The feed records no dwell time.** `arrivals` and `departures` are equal at
   all 1,540,565 stop-times, because the agency publishes one time per stop. So
@@ -204,7 +204,7 @@ times, string stop ids like `20921_PF5`, non-standard column order, no
 overtake each other** — an edge case that had only ever been exercised by a
 test I wrote by hand.
 
-Three things were wrong.
+Four things were wrong.
 
 **1. The feed declares no walking transfers, and that changes answers.**
 `transfers.txt` is absent, so the router could only change buses where two
@@ -263,9 +263,21 @@ peak memory    1588 MB ->  100 MB   (16x)
 data shipped     44 MB ->  7.9 MB
 ```
 
+**4. A `route_id` is not a bus number.** The console showed `2130` on a leg
+for a while. That looks like a bus number and is not one — it is the feed's
+internal key. The number painted on the front is `route_short_name` in
+`routes.txt`, which the loader never read.
+
+Patterns are still grouped by `route_id`, and the counts say why that
+matters: 7,838 patterns carry **4,670 distinct ids but only 4,416 distinct
+numbers**, so grouping by the number would have merged genuinely different
+stop sequences into one pattern. The name rides alongside instead — and it
+does not inherit the `#1` suffix the overtaking split adds to an id, because
+the bus still has the same number on the front of it.
+
 The honest summary: the algorithm and the data structures held up, the
 *benchmark* did not. A synthetic feed built to be convenient was convenient in
-exactly the ways that flattered the implementation, and two of the three
+exactly the ways that flattered the implementation, and three of the four
 problems above were invisible until a real agency's data went through it.
 
 ## Run it
@@ -274,7 +286,7 @@ problems above were invisible until a real agency's data went through it.
 python -m venv .venv && .venv/Scripts/pip install -e ".[api,dev]"
 
 python scripts/make_sample_feed.py          # writes data/sample-feed.zip
-python -m pytest                            # 138 tests
+python -m pytest                            # 148 tests
 uvicorn transitlab.api.app:app --reload     # http://127.0.0.1:8000
 ```
 
@@ -360,13 +372,9 @@ larger networks for property tests and benchmarks.
   `shapes.txt` geometry is not loaded.
 - Blank intermediate stop times are filled from their partner field rather
   than interpolated along the trip.
-- **No bus numbers.** A leg tells you where to board and when, not which bus
-  to catch. The loader takes `trips.route_id`, and in this feed those are
-  internal numerics (`1000`, `1001`); the number painted on the bus is
-  `route_short_name` in `routes.txt`, which is never read. Fixing it means a
-  loader change and a rebuilt snapshot, and the upstream feed has moved on
-  since this one was built, so it would also move every figure quoted here.
-  The console shows no route plaque rather than a plausible-looking wrong one.
+- Route **long** names are not shown. A leg names the bus (`VW-226KBS`) but
+  not where that service is headed, which on an unfamiliar network is half
+  the information a passenger wants.
 - Python queries cost hundreds of milliseconds to ~1.4 s on a city-sized
   network. The remaining cost is the interpreter in the round loop, which is
   exactly what the browser engine demonstrates: the same loop under a JIT is

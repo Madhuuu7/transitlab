@@ -368,6 +368,29 @@ def _read_patterns(
     trip_columns = _columns(con, "trips")
     route_expr = "t.route_id" if "route_id" in trip_columns else "''"
 
+    # The number on the front of the bus, which is not the route_id. In the
+    # BMTC feed the ids are internal integers ("3447") and the thing a
+    # passenger needs is route_short_name ("296-B", "KLN-HBR"). Patterns are
+    # still grouped by id below, because two routes can share a number while
+    # running different stop sequences, and merging them would be wrong.
+    #
+    # Falls back through the long name to the id, so a feed with no
+    # routes.txt, or one with blank short names, still names its routes
+    # somehow rather than showing a passenger an empty plaque.
+    route_name_expr = "''"
+    if _has_view(con, "routes") and "route_id" in trip_columns:
+        route_columns = _columns(con, "routes")
+        parts = []
+        if "route_short_name" in route_columns:
+            parts.append("NULLIF(TRIM(r.route_short_name), '')")
+        if "route_long_name" in route_columns:
+            parts.append("NULLIF(TRIM(r.route_long_name), '')")
+        if parts:
+            route_name_expr = f"COALESCE({', '.join(parts)}, t.route_id)"
+    # LEFT, so a trip whose route_id is missing from routes.txt keeps its
+    # stop times instead of vanishing from the timetable.
+    route_join = "LEFT JOIN routes r ON r.route_id = t.route_id" if route_name_expr != "''" else ""
+
     service_filter = ""
     params: list[object] = []
     if service_ids is not None:
@@ -383,12 +406,14 @@ def _read_patterns(
         CREATE OR REPLACE TEMP TABLE _st AS
         SELECT s.trip_id,
                {route_expr} AS route_id,
+               {route_name_expr} AS route_name,
                CAST(s.stop_sequence AS INTEGER) AS seq,
                s.stop_id,
                gtfs_seconds(COALESCE(s.arrival_time, s.departure_time)) AS arr,
                gtfs_seconds(COALESCE(s.departure_time, s.arrival_time)) AS dep
         FROM stop_times s
         JOIN trips t USING (trip_id)
+        {route_join}
         {service_filter}
         """,
         params,
@@ -402,6 +427,7 @@ def _read_patterns(
         CREATE OR REPLACE TEMP TABLE _trip AS
         SELECT trip_id,
                any_value(route_id) AS route_id,
+               any_value(route_name) AS route_name,
                string_agg(stop_id, '>' ORDER BY seq) AS pattern_key,
                count(*) AS n_stops,
                min(dep) AS first_dep,
@@ -428,7 +454,7 @@ def _read_patterns(
 
     rows = con.execute(
         """
-        SELECT p.route_id, p.pattern_key, s.trip_id, s.stop_id, s.arr, s.dep
+        SELECT p.route_id, p.route_name, p.pattern_key, s.trip_id, s.stop_id, s.arr, s.dep
         FROM _st s
         JOIN _trip p USING (trip_id)
         WHERE NOT p.incomplete AND p.n_stops >= 2
@@ -439,14 +465,14 @@ def _read_patterns(
     # Rows arrive grouped by (route_id, pattern_key) and, inside a group, by
     # trip then stop_sequence, so one linear pass fills each pattern: a new
     # trip_id starts a new row of the stop-time table.
-    grouped: dict[tuple[str, str], tuple[list[str], list[list[int]], list[list[int]]]] = {}
-    for route_id, pattern_key, row_trip, _stop_id, arr, dep in rows:
+    grouped: dict[tuple[str, str], tuple[str, list[str], list[list[int]], list[list[int]]]] = {}
+    for route_id, route_name, pattern_key, row_trip, _stop_id, arr, dep in rows:
         key = (route_id, pattern_key)
         bucket = grouped.get(key)
         if bucket is None:
-            bucket = ([], [], [])
+            bucket = (route_name, [], [], [])
             grouped[key] = bucket
-        trip_ids, arrivals, departures = bucket
+        _name, trip_ids, arrivals, departures = bucket
         if not trip_ids or trip_ids[-1] != row_trip:
             trip_ids.append(row_trip)
             arrivals.append([])
@@ -457,12 +483,13 @@ def _read_patterns(
     return [
         RawPattern(
             route_id=route_id,
+            route_name=route_name,
             stops=pattern_key.split(">"),
             trip_ids=trip_ids,
             arrivals=arrivals,
             departures=departures,
         )
-        for (route_id, pattern_key), (trip_ids, arrivals, departures) in grouped.items()
+        for (route_id, pattern_key), (route_name, trip_ids, arrivals, departures) in grouped.items()
     ]
 
 
@@ -535,6 +562,10 @@ def split_overtaking(raw: RawPattern) -> list[RawPattern]:
         pieces.append(
             RawPattern(
                 route_id=raw.route_id if index == 0 else f"{raw.route_id}#{index}",
+                # The name does *not* get the suffix. The split is an internal
+                # consequence of trips overtaking each other; the bus still
+                # has the same number on the front of it.
+                route_name=raw.route_name,
                 stops=list(raw.stops),
                 trip_ids=[raw.trip_ids[t] for t in band],
                 arrivals=[list(raw.arrivals[t]) for t in band],

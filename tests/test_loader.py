@@ -254,3 +254,115 @@ def test_overtaking_feed_loads_by_splitting(tmp_path: Path) -> None:
     assert stats.patterns_split == 1
     assert timetable.n_patterns == 2
     assert timetable.n_trips == 2
+
+
+# ----------------------------------------------------------------------
+# route names: the number on the bus, which is not the route_id
+# ----------------------------------------------------------------------
+def test_route_short_name_becomes_the_display_name(sample) -> None:
+    """The sample feed's route_id is "BLUE" and its short name is "1"."""
+    blue = [p for p in range(sample.n_patterns) if sample.pattern_route_id[p] == "BLUE"]
+    assert blue, "fixture no longer has a BLUE route"
+    for pattern in blue:
+        assert sample.pattern_route_name[pattern] == "1"
+
+
+def test_every_pattern_has_a_name(sample) -> None:
+    assert len(sample.pattern_route_name) == sample.n_patterns
+    assert all(name for name in sample.pattern_route_name)
+
+
+def test_long_name_is_used_when_the_short_one_is_blank(tmp_path: Path) -> None:
+    feed = _write_feed(
+        tmp_path / "longname",
+        **{
+            "routes.txt": (
+                "route_id,route_short_name,route_long_name,route_type\n"
+                "R1,,Airport Flyer,3\n"
+            )
+        },
+    )
+    timetable = load_timetable(feed)
+    assert timetable.pattern_route_name == ("Airport Flyer",)
+
+
+def test_whitespace_only_short_name_is_treated_as_blank(tmp_path: Path) -> None:
+    feed = _write_feed(
+        tmp_path / "spaces",
+        **{
+            "routes.txt": (
+                "route_id,route_short_name,route_long_name,route_type\n"
+                'R1,"   ",Airport Flyer,3\n'
+            )
+        },
+    )
+    assert load_timetable(feed).pattern_route_name == ("Airport Flyer",)
+
+
+def test_route_id_is_the_last_resort_when_there_is_no_routes_file(
+    tmp_path: Path,
+) -> None:
+    """routes.txt is optional, and a nameless route still has to be shown."""
+    feed = _write_feed(tmp_path / "noroutes")
+    (feed / "routes.txt").unlink()
+    timetable = load_timetable(feed)
+    assert timetable.pattern_route_name == ("R1",)
+
+
+def test_a_trip_whose_route_is_missing_from_routes_txt_survives(
+    tmp_path: Path,
+) -> None:
+    """The join is a LEFT join: an unlisted route must not delete the trips."""
+    feed = _write_feed(
+        tmp_path / "orphan",
+        **{"routes.txt": "route_id,route_short_name,route_type\nR9,9,3\n"},
+    )
+    timetable = load_timetable(feed)
+    assert timetable.n_patterns == 1
+    assert timetable.pattern_route_name == ("R1",)
+
+
+def test_two_routes_sharing_a_number_stay_separate_patterns(tmp_path: Path) -> None:
+    """Grouping by name instead of id would merge these, and must not.
+
+    Real feeds do this: in BMTC, 7,838 patterns carry 4,670 distinct route
+    ids but only 4,416 distinct numbers.
+    """
+    feed = _write_feed(
+        tmp_path / "shared",
+        **{
+            "routes.txt": (
+                "route_id,route_short_name,route_type\nR1,500,3\nR2,500,3\n"
+            ),
+            "trips.txt": (
+                "route_id,service_id,trip_id\nR1,WD,t1\nR2,WD,t2\n"
+            ),
+            "stop_times.txt": (
+                "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+                "t1,08:00:00,08:00:00,A,1\n"
+                "t1,08:10:00,08:10:00,B,2\n"
+                "t2,09:00:00,09:00:00,B,1\n"
+                "t2,09:10:00,09:10:00,C,2\n"
+            ),
+        },
+    )
+    timetable = load_timetable(feed)
+    assert timetable.n_patterns == 2
+    assert set(timetable.pattern_route_id) == {"R1", "R2"}
+    assert timetable.pattern_route_name == ("500", "500")
+
+
+def test_the_overtaking_split_does_not_suffix_the_bus_number() -> None:
+    """route_id gains "#1"; the number on the front of the bus does not."""
+    raw = RawPattern(
+        route_id="R1",
+        route_name="500-C",
+        stops=["A", "B", "C"],
+        trip_ids=["local", "express"],
+        arrivals=[[0, 600, 1200], [60, 300, 500]],
+        departures=[[0, 600, 1200], [60, 300, 500]],
+    )
+    pieces = split_overtaking(raw)
+    assert len(pieces) == 2
+    assert [p.route_id for p in pieces] == ["R1", "R1#1"]
+    assert [p.route_name for p in pieces] == ["500-C", "500-C"]

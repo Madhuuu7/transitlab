@@ -40,6 +40,7 @@ export interface LegOut {
   departure: string | null;
   arrival: string | null;
   route_id: string | null;
+  route_name: string | null;
   trip_id: string | null;
   seconds: number;
 }
@@ -279,6 +280,7 @@ export class LocalEngine {
         departure: formatGtfsTime(leg.departure),
         arrival: formatGtfsTime(leg.arrival),
         route_id: leg.routeId,
+        route_name: leg.routeName,
         trip_id: leg.tripId,
         seconds: leg.arrival - leg.departure,
       };
@@ -294,6 +296,7 @@ export class LocalEngine {
       departure: null,
       arrival: null,
       route_id: null,
+      route_name: null,
       trip_id: null,
       seconds: leg.seconds,
     };

@@ -80,7 +80,7 @@ from .timetable import Stop, Timetable
 
 #: Bumped whenever the meaning or layout of the bundle changes. The console
 #: refuses a version it does not know rather than routing on a guess.
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
 
 #: Offsets are stored as uint16 only while every one of them fits.
 U16_MAX = 65_535
@@ -245,6 +245,7 @@ def encode(timetable: Timetable, feed_name: str) -> Bundle:
         "stop_ids": [s.stop_id for s in timetable.stops],
         "stop_names": [s.name for s in timetable.stops],
         "pattern_route_id": list(timetable.pattern_route_id),
+        "pattern_route_name": list(timetable.pattern_route_name),
         "trip_ids": list(timetable.trip_ids),
     }
     return Bundle(manifest=manifest, binary=b"".join(chunks), strings=strings)
@@ -315,6 +316,7 @@ def decode(bundle: Bundle) -> Timetable:
         stop_index={s.stop_id: i for i, s in enumerate(stops)},
         coords=coords,
         pattern_route_id=tuple(strings["pattern_route_id"]),
+        pattern_route_name=tuple(strings["pattern_route_name"]),
         pattern_stop_offset=np.ascontiguousarray(raw["pattern_stop_offset"], np.int32),
         pattern_stops=np.ascontiguousarray(raw["pattern_stops"], np.int32),
         pattern_trip_offset=np.ascontiguousarray(raw["pattern_trip_offset"], np.int32),
