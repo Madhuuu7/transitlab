@@ -109,6 +109,8 @@ def generate_footpaths(
 
     xs = [lon * metres_per_deg_lon for _, lon in coordinates]
     ys = [lat * metres_per_deg_lat for lat, _ in coordinates]
+    lats = [lat for lat, _ in coordinates]
+    lons = [lon for _, lon in coordinates]
 
     buckets: dict[tuple[int, int], list[int]] = defaultdict(list)
     for index, (x, y) in enumerate(zip(xs, ys)):
@@ -128,12 +130,22 @@ def generate_footpaths(
                 candidates.extend(buckets.get((cell_x + dx, cell_y + dy), ()))
 
         for position, i in enumerate(members):
-            xi, yi = xs[i], ys[i]
+            lat_i, lon_i = lats[i], lons[i]
             # Within the home cell, compare against later members only, for
             # the same reason: each unordered pair exactly once.
             for j in (*members[position + 1:], *candidates):
-                dx = xs[j] - xi
-                dy = ys[j] - yi
+                # Differenced in degrees and *then* scaled, not scaled and
+                # then differenced. The projected coordinates are around
+                # 1.4e6 m, so subtracting two of them to get a 30 m gap
+                # cancels away five significant digits; the error is about
+                # 1e-10 m, which is nothing except exactly at the radius,
+                # where it decides the comparison. Hypothesis found a pair
+                # 31.0 m apart at a radius of 31.0 that the grid admitted and
+                # the brute-force reference rejected. The buckets still use
+                # the absolute values -- bucketing only needs to be
+                # consistent, not accurate.
+                dx = (lons[j] - lon_i) * metres_per_deg_lon
+                dy = (lats[j] - lat_i) * metres_per_deg_lat
                 distance_squared = dx * dx + dy * dy
                 if distance_squared > radius_squared:
                     continue
