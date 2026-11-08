@@ -2,14 +2,21 @@
 
 A public-transit journey planner where the routing algorithm is the project.
 
+**[Plan a journey across Bengaluru →](https://madhuuu7.github.io/transitlab/)**
+Live, with no server behind it: the page downloads the city's timetable once
+and runs the router in your tab.
+
 Most transit apps call a directions API. This implements **RAPTOR**
 (Round-bAsed Public Transit Optimized Router, Delling–Pajor–Werneck 2012) from
 scratch over real GTFS data, proves it correct against an independently written
 time-expanded Dijkstra, and benchmarks it against that same baseline.
 
 ```
- GTFS zip ──► DuckDB ingest ──► flat CSR NumPy arrays ──► RAPTOR ──► FastAPI ──► MapLibre UI
-              patterns, times     offset[p]+trip*L+i      rounds      journeys     map + isochrones
+ GTFS zip ──► DuckDB ingest ──► flat CSR arrays ──► RAPTOR ──► FastAPI
+              patterns, times   offset[p]+trip*L+i   rounds     journeys
+                                        │
+                                        └──► 1.9 MB bundle ──► the same RAPTOR,
+                                                               in the browser
 ```
 
 ## What it does
@@ -41,6 +48,77 @@ scales with rounds, not with graph size.
 ```sh
 python scripts/benchmark.py --stops 4000 --patterns 700 --queries 15
 ```
+
+## The router runs in the browser
+
+The deployed console has no backend. It downloads the timetable once and
+answers every query in the tab, using a TypeScript transcription of the same
+RAPTOR implementation — same rounds, same two labels per stop, same pruning,
+same journey reconstruction.
+
+That started as a deployment problem and turned out to be the faster answer.
+Both engines, same feed, same work, 40 one-to-all queries at 08:00 with a
+120-second change time:
+
+| | Python | browser |
+|---|---|---|
+| median | 1,373 ms | **37.1 ms** |
+| mean | 1,437 ms | 37.9 ms |
+| p95 | 2,394 ms | 53.8 ms |
+| stops reached, mean | 9,414 / 9,948 | 9,552 / 9,948 |
+
+Not a NumPy story. RAPTOR's round loop is irreducibly scalar — millions of
+individual `int32` reads — and the arrays were already flat, so there is
+nothing left to vectorise. The 37x is what a JIT does to that loop and an
+interpreter does not. Both numbers come out of CI on every push.
+
+### Which means the port has to be provable
+
+A mis-ported comparison would not throw. It would hand someone a journey three
+minutes or one change away from the truth, and look entirely plausible doing
+it — and the live page has no server to be caught out by.
+
+So `scripts/record_parity.py` drives the real FastAPI app over the Bengaluru
+snapshot and records what a client would actually receive: 49 journeys and 6
+isochrones, seeded, with 10 unreachable pairs, six departure times, four change
+times and two walking limits. `web/test/parity.test.ts` answers the same
+queries in TypeScript and compares **whole response objects** — every leg,
+every route and trip id, the `null`s on a walk leg. Two routers can agree on
+when you arrive and disagree about which bus you were on.
+
+Three things had to be *made* to agree rather than assumed to:
+
+- **Ties.** Two patterns can reach a stop at the same second, and a label only
+  improves on a strict `<`, so whichever is scanned first becomes the recorded
+  parent — the journey you get back depends on scan order. The Python iterated
+  a `set`, leaving that to the hash table. Both sides now sort.
+- **Rounding.** The API reports `round(seconds / 60)`, and Python rounds halves
+  to even: a 150-second walk is 2 minutes there and 3 under `Math.round`.
+- **The linear-scan threshold.** Kept at 24 trips, because the finding behind
+  it is about the feed, not about Python.
+
+## Sending a city over the wire
+
+A snapshot is the right shape to load from disk and the wrong shape to send to
+a browser. Two properties of the real feed, both measured by the encoder rather
+than assumed, take 7.86 MB to **1.90 MB**:
+
+- **The feed records no dwell time.** `arrivals` and `departures` are equal at
+  all 1,540,565 stop-times, because the agency publishes one time per stop. So
+  half the stop-time data is a copy of the other half. The encoder compares the
+  two arrays and ships one table when they match, both when they do not.
+- **Stop times fit in 16 bits.** Absolute GTFS seconds need `int32` because the
+  service day runs past 24:00, but measured from its own trip's first departure
+  every stop time here is at most 44,999 seconds. Storing `uint16` offsets
+  beside one `int32` per trip halves the bytes and, more importantly, makes
+  them compress — neighbouring offsets are close numbers, where absolute
+  timestamps spread over a day are not. 3.32 MB → 0.77 MB. Above 65,535 the
+  format falls back to `int32` rather than wrapping, and a test stretches a
+  trip past the limit to prove it.
+
+The decoder rebuilds the full `int32` tables before the router sees them, so
+the encoding is invisible above that layer and the browser runs the same
+arithmetic the server does.
 
 ## Why it is built this way
 
@@ -196,9 +274,33 @@ problems above were invisible until a real agency's data went through it.
 python -m venv .venv && .venv/Scripts/pip install -e ".[api,dev]"
 
 python scripts/make_sample_feed.py          # writes data/sample-feed.zip
-python -m pytest                            # 108 tests
+python -m pytest                            # 138 tests
 uvicorn transitlab.api.app:app --reload     # http://127.0.0.1:8000
 ```
+
+### The console
+
+It needs no API — only the timetable bundle, which is committed:
+
+```sh
+cd web && npm install
+npm run dev                                 # http://127.0.0.1:5177
+npm test                                    # 58 parity assertions vs the Python API
+node test/bench.ts                          # the browser router, on the real feed
+```
+
+Rebuild the bundle after changing the loader, the footpath generator or the
+CSR layout, for the same reason the snapshot needs rebuilding:
+
+```sh
+python scripts/make_web_bundle.py data/bmtc.npz web/public/feed
+python scripts/record_parity.py             # re-record the answers to match
+```
+
+Deployment is GitHub Pages, published by `.github/workflows/pages.yml` on
+every push to `main`. Nothing in the published version is recorded or
+degraded — it computes each query on demand, which is why the page carries no
+"this is a snapshot" caveat.
 
 ### Running the real Bengaluru network
 
@@ -258,10 +360,18 @@ larger networks for property tests and benchmarks.
   `shapes.txt` geometry is not loaded.
 - Blank intermediate stop times are filled from their partner field rather
   than interpolated along the trip.
-- Queries are pure Python and cost hundreds of milliseconds on a city-sized
-  network. The remaining cost is the interpreter in the round loop, so going
-  faster means vectorising the pattern scan or dropping to a compiled kernel,
-  not tuning accessors.
+- **No bus numbers.** A leg tells you where to board and when, not which bus
+  to catch. The loader takes `trips.route_id`, and in this feed those are
+  internal numerics (`1000`, `1001`); the number painted on the bus is
+  `route_short_name` in `routes.txt`, which is never read. Fixing it means a
+  loader change and a rebuilt snapshot, and the upstream feed has moved on
+  since this one was built, so it would also move every figure quoted here.
+  The console shows no route plaque rather than a plausible-looking wrong one.
+- Python queries cost hundreds of milliseconds to ~1.4 s on a city-sized
+  network. The remaining cost is the interpreter in the round loop, which is
+  exactly what the browser engine demonstrates: the same loop under a JIT is
+  37x faster. Making the Python match would mean a compiled kernel, not tuned
+  accessors.
 - Generated footpaths are straight-line estimates. They do not know whether a
   crossing, a footway or a flyover is in the way, and they will cheerfully
   walk you across a six-lane road. A feed's own `transfers.txt` always wins.
@@ -280,9 +390,16 @@ src/transitlab/
   gtfs/loader.py       DuckDB ingest, pattern extraction, overtaking split
   gtfs/footpaths.py    walking transfers from geography, grid-bucketed
   gtfs/snapshot.py     built timetables saved and reloaded, versioned
+  gtfs/webbundle.py    the same timetable re-encoded for a browser, 7.9 -> 1.9 MB
   routing/raptor.py    the router, journey reconstruction, isochrones
   routing/reference.py time-expanded Dijkstra oracle and baseline
   api/app.py           FastAPI endpoints
-web/index.html         MapLibre UI, no build step
-scripts/               sample feed, snapshot builder, benchmark
+web/src/engine/        the same RAPTOR in TypeScript, over typed arrays
+  raptor.ts              a transcription of routing/raptor.py
+  timetable.ts           the CSR accessors, same arithmetic
+  bundle.ts              decodes the bundle back to full int32 tables
+  api.ts                 the HTTP endpoints, answered locally
+web/src/ui/            the console: map, stop picker, journey diagram
+web/test/parity.test.ts  holds the browser router to the Python one
+scripts/               sample feed, snapshot, bundle, parity, benchmark
 ```

@@ -16,6 +16,14 @@ from an unofficial GTFS dataset for BMTC bus services.
 | **Feed validity** | 2026-09-07 to 2027-09-07 (`feed_info.txt`) |
 | **Built with** | `scripts/make_snapshot.py data/bmtc.zip data/bmtc.npz --walk-radius 250` |
 
+`web/public/feed/` holds the same timetable re-encoded for the browser (see
+`src/transitlab/gtfs/webbundle.py`). It carries no data the snapshot does not
+and is covered by everything said here about the snapshot — including the
+licence. The published console serves it, so anyone loading
+<https://madhuuu7.github.io/transitlab/> receives a copy of this derived
+database, which is why the map credits BMTC via Vonter under ODbL on the page
+itself rather than only in this file.
+
 `data/bmtc.npz` is a **derived database** under ODbL §4.4, so it is offered
 here under the **same ODbL v1.0 licence** as the dataset it comes from. Anyone
 redistributing it, or a further derivative of it, is bound by those terms —
