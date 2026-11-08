@@ -31,9 +31,16 @@ from ..gtfs.timetable import Timetable
 from ..routing.raptor import Journey, Raptor, TripLeg
 
 DEFAULT_FEED = Path("data/sample-feed.zip")
-# The map UI is one static page with no build step, served by this app so the
-# whole project deploys as a single service on a free tier.
-WEB_ROOT = Path(__file__).resolve().parents[3] / "web"
+# The built console, if it has been built. It is a vite app now rather than a
+# single page, and `web/` itself holds TypeScript sources a browser cannot
+# run -- serving that directory would hand visitors a blank page and a module
+# error. `web/dist` is gitignored, so this is routinely absent and the API
+# must work without it.
+#
+# The console does not need this app at all: it downloads the timetable
+# bundle and routes in the browser. Serving it here is a convenience for
+# `uvicorn ... --app-dir src` during development, not how it is deployed.
+WEB_ROOT = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 
 # ----------------------------------------------------------------------

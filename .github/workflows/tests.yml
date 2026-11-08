@@ -1,0 +1,106 @@
+# The suite, on every push.
+#
+# The parity job is the one that matters. transitlab ships the same router
+# twice -- once in Python and once in TypeScript -- and the deployed console
+# runs the TypeScript one with no server behind it to disagree with. So the
+# browser engine is re-checked against freshly recorded answers from the
+# Python API on every push, over the real 9,948-stop Bengaluru feed, rather
+# than against a fixture that was true once.
+#
+# The bundle is regenerated here too. It is committed so a clone works
+# without Python, but a committed binary that nothing rebuilds is a binary
+# that drifts from the encoder that wrote it.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[api,dev]"
+      - run: pytest -q
+
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # A type error is a blank console in production, and the Python suite
+      # cannot see it.
+      - run: npm run build
+        working-directory: web
+
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[api,dev]"
+
+      - name: Rebuild the browser bundle from the committed snapshot
+        # Deliberately not compared byte-for-byte against the committed copy.
+        # The encoder is deterministic on one machine and has a test saying
+        # so, but gzip output is not guaranteed identical across zlib builds,
+        # and a job that fails because the runner ships zlib-ng teaches
+        # nobody anything. What matters is that the bundle this commit
+        # produces still means the timetable, and the parity suite below
+        # runs against this freshly built one to establish exactly that.
+        run: python scripts/make_web_bundle.py data/bmtc.npz web/public/feed
+
+      - name: Re-record the Python API's answers from this commit
+        run: python scripts/record_parity.py
+
+      - name: Fail if the recorded answers changed
+        # A diff means this commit changed what the server answers. That may
+        # be intended, but it must be committed deliberately rather than
+        # discovered later as a browser bug.
+        run: git diff --exit-code --stat web/test/fixtures/parity.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+
+      - name: Hold the browser router to them
+        run: npm test
+        working-directory: web
+
+      # Both engines, same feed, same work, in one log next to each other --
+      # so the figure in the README is a number anyone can re-read from a
+      # run rather than one I measured once on my laptop.
+      - name: Benchmark the Python router
+        run: python scripts/benchmark.py --feed data/bmtc.npz --queries 20 --skip-reference
+
+      - name: Benchmark the browser router
+        run: node test/bench.ts
+        working-directory: web

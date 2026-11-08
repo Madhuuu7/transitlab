@@ -1,0 +1,81 @@
+# Publish the console as a static page.
+#
+# There is nothing to fake here, which is the unusual part. The console has
+# no backend by design: it downloads the timetable bundle and runs the same
+# RAPTOR implementation the Python server runs, in the tab. So unlike a
+# console that normally talks to a runtime, this one is not degraded by
+# being published -- every stop pair and every isochrone on the live page is
+# computed on demand, and the page says so instead of carrying a "this is a
+# recording" caveat.
+#
+# The bundle is rebuilt here from the committed snapshot rather than taken
+# from the repository, so what is published is what this commit's encoder
+# produces.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[api,dev]"
+
+      - name: Build the timetable bundle from this commit
+        run: python scripts/make_web_bundle.py data/bmtc.npz web/public/feed
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+
+      - name: Check the browser router still matches the Python one
+        # Publishing a router that disagrees with its own reference would be
+        # the one unrecoverable mistake here, since the live page has no
+        # server to be caught out by.
+        run: npm test
+        working-directory: web
+
+      - name: Build
+        # A project site is served from /<repo>/, so asset URLs have to be
+        # relative. Every fetch in the console is relative for the same
+        # reason -- including the three feed files.
+        run: npm run build -- --base=./
+        working-directory: web
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+import importlib
+
 from transitlab.api.app import create_app, get_engine
+
+# transitlab/api/__init__.py re-exports the FastAPI instance as ``app``, which
+# shadows the submodule of the same name: ``import transitlab.api.app as m``
+# binds the instance, not the module. importlib asks for the module.
+app_module = importlib.import_module("transitlab.api.app")
 
 
 @pytest.fixture(scope="module")
@@ -125,3 +132,33 @@ def test_stops_limit_clears_a_whole_city(client) -> None:
 
     feed = client.get("/feed").json()
     assert len(response.json()) == feed["stops"]
+
+
+# ----------------------------------------------------------------------
+# the console is optional
+# ----------------------------------------------------------------------
+def test_the_api_answers_when_the_console_was_never_built(monkeypatch, tmp_path) -> None:
+    """web/dist is gitignored, so a fresh clone has no console at all.
+
+    The endpoints must not depend on it. This is the failure CI would
+    otherwise find first and a reader would find second: a suite that passes
+    locally because a stale build happens to be sitting in the working tree.
+    """
+    monkeypatch.setattr(app_module, "WEB_ROOT", tmp_path / "never-built")
+    client = TestClient(app_module.create_app())
+    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/feed").status_code == 200
+    assert client.get("/stops", params={"limit": 3}).status_code == 200
+
+
+def test_the_built_console_is_served_at_the_root_when_present(
+    monkeypatch, tmp_path
+) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>console</title>", "utf-8")
+    monkeypatch.setattr(app_module, "WEB_ROOT", dist)
+    client = TestClient(app_module.create_app())
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "console" in response.text
