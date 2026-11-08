@@ -30,6 +30,7 @@ interface Loaded {
   engine: LocalEngine;
   timetable: Timetable;
   transferred: number;
+  loadMs: number;
   decodeMs: number;
 }
 
@@ -129,7 +130,8 @@ export default function App() {
           engine,
           timetable: feed.timetable,
           transferred: feed.transferred,
-          decodeMs: feed.elapsedMs,
+          loadMs: feed.elapsedMs,
+          decodeMs: feed.decodeMs,
         });
         setFrom(findByName(feed.timetable, OPENING.from));
         setTo(findByName(feed.timetable, OPENING.to));
@@ -353,7 +355,8 @@ export default function App() {
           </div>
           <div className="ledger__row">
             <span>
-              <b>{(loaded.transferred / 1e6).toFixed(2)} MB</b> downloaded, decoded in{" "}
+              <b>{(loaded.transferred / 1e6).toFixed(2)} MB</b> in{" "}
+              <b>{(loaded.loadMs / 1000).toFixed(1)} s</b>, decoded in{" "}
               <b>{loaded.decodeMs.toFixed(0)} ms</b>
             </span>
             <span>

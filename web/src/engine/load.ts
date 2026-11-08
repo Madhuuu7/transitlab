@@ -82,6 +82,14 @@ export interface LoadedFeed {
   transferred: number;
   /** Milliseconds from the first request to a routable timetable. */
   elapsedMs: number;
+  /**
+   * Milliseconds spent turning the bytes into a timetable, with the network
+   * excluded. Reported separately because the two differ by more than an
+   * order of magnitude and a single figure covering both would be read as
+   * the decode -- which is the part this project can actually claim credit
+   * for making fast.
+   */
+  decodeMs: number;
 }
 
 /**
@@ -121,7 +129,9 @@ export async function loadFeed(
     binary.byteOffset,
     binary.byteOffset + binary.byteLength,
   ) as ArrayBuffer;
+  const decodeStarted = performance.now();
   const timetable = decodeBundle(manifest, buffer, strings);
+  const decodeMs = performance.now() - decodeStarted;
 
   // What the build says it wrote, not what this run happened to observe.
   // Falls back to the observed figure for a bundle built before the manifest
@@ -135,5 +145,6 @@ export async function loadFeed(
     manifest,
     transferred: declared,
     elapsedMs: performance.now() - started,
+    decodeMs,
   };
 }
