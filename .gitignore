@@ -13,3 +13,9 @@ data/*
 *.duckdb
 .env
 .DS_Store
+
+# The console's toolchain and build output. The feed bundle under
+# web/public/feed is committed on purpose -- see src/transitlab/gtfs/webbundle.py.
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
