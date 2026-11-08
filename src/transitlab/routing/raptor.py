@@ -370,7 +370,14 @@ class Raptor:
             # earliest such position. Entering earlier cannot help: nothing
             # before it improved last round.
             queue: dict[int, int] = {}
-            for stop in improved:
+            # Sorted, not merely iterated. Two patterns can reach a stop at
+            # the same second; the label only improves on a strict <, so the
+            # pattern scanned first is the one recorded as the parent, and the
+            # journey that comes back depends on the scan order. Iterating a
+            # set leaves that order to the hash table -- fine for one
+            # implementation, not fine for two that must agree. The browser
+            # port sorts here for the same reason.
+            for stop in sorted(improved):
                 for pattern, position in tt.patterns_at(stop):
                     current = queue.get(pattern)
                     if current is None or position < current:
