@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from transitlab.gtfs.loader import LoadStats, load_timetable  # noqa: E402
+from transitlab.gtfs.snapshot import load as load_snapshot  # noqa: E402
 from transitlab.gtfs.synthetic import random_feed  # noqa: E402
 from transitlab.gtfs.timetable import Timetable, timetable_from_feed  # noqa: E402
 from transitlab.routing.raptor import Raptor  # noqa: E402
@@ -67,7 +68,11 @@ def memory_bytes(timetable: Timetable) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--feed", type=Path, help="GTFS zip or directory")
+    parser.add_argument(
+        "--feed",
+        type=Path,
+        help="GTFS zip or directory, or a .npz snapshot",
+    )
     parser.add_argument("--date", help="service date YYYYMMDD, for a real feed")
     parser.add_argument("--stops", type=int, default=1200)
     parser.add_argument("--patterns", type=int, default=240)
@@ -83,7 +88,17 @@ def main() -> int:
     parser.add_argument("--markdown", action="store_true", help="emit a table")
     args = parser.parse_args()
 
-    if args.feed:
+    if args.feed and args.feed.suffix == ".npz":
+        # A snapshot, not a feed. This matters for being able to benchmark the
+        # real city at all: ingesting the BMTC zip peaks near 1.6 GB, and the
+        # zip is not in the repository -- the committed snapshot is. Without
+        # this branch the only feed a fresh clone can benchmark is a synthetic
+        # one, which is exactly the benchmark that misled this project once
+        # already. The reported build time is then a snapshot load, and the
+        # table below says so.
+        timetable, load_seconds = timed(load_snapshot, args.feed)
+        source = f"{args.feed.name} (snapshot)"
+    elif args.feed:
         stats = LoadStats()
         timetable, load_seconds = timed(
             load_timetable, args.feed, date=args.date, stats=stats
@@ -110,12 +125,22 @@ def main() -> int:
     raptor = Raptor(timetable, min_change_time=args.change_time)
     raptor.run(origins[0], departure)  # warm the code paths
     raptor_times = []
+    reached_total = 0
     for origin in origins:
-        _, seconds = timed(raptor.run, origin, departure)
+        result, seconds = timed(raptor.run, origin, departure)
         raptor_times.append(seconds * 1000)
+        reached_total += int(result.reachable(24 * 3600).size)
 
     print()
     print(f"RAPTOR    {_describe(raptor_times)}  (one-to-all, {args.queries} queries)")
+    # Reported so this can be compared against the browser engine's benchmark
+    # (``web/test/bench.ts``), which runs the same algorithm over the same
+    # arrays. Comparing milliseconds means nothing unless the two are doing
+    # the same amount of work, and "stops reached" is the measure of that.
+    print(
+        f"          {reached_total // args.queries} stops reached on average "
+        f"of {timetable.n_stops}"
+    )
 
     if args.skip_reference:
         return 0
