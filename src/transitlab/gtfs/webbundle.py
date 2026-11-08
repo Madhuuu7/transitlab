@@ -343,20 +343,33 @@ def _gzip(payload: bytes) -> bytes:
 
 
 def write(bundle: Bundle, directory: str | Path) -> dict[str, int]:
-    """Write the gzipped bundle into ``directory``; return the file sizes."""
+    """Write the gzipped bundle into ``directory``; return the file sizes.
+
+    The two large files are compressed first and their sizes recorded in the
+    manifest, so the console can state its own download size without
+    measuring it. Measuring it is the thing that does not work: a host that
+    sets ``Content-Encoding: gzip`` on a ``.gz`` file has the browser inflate
+    it before any code can see it, and the figure on the page then changes
+    with the host rather than with the feed. These numbers are a property of
+    the build.
+    """
     out = Path(directory)
     out.mkdir(parents=True, exist_ok=True)
 
-    files = {
-        "manifest.json": json.dumps(bundle.manifest, separators=(",", ":")).encode(),
-        "timetable.bin": bundle.binary,
-        "strings.json": json.dumps(bundle.strings, separators=(",", ":")).encode(),
-    }
     sizes: dict[str, int] = {}
-    for name, payload in files.items():
+    for name, payload in (
+        ("timetable.bin", bundle.binary),
+        ("strings.json", json.dumps(bundle.strings, separators=(",", ":")).encode()),
+    ):
         compressed = _gzip(payload)
         (out / f"{name}.gz").write_bytes(compressed)
         sizes[name] = len(compressed)
+
+    manifest = dict(bundle.manifest)
+    manifest["download"] = dict(sizes)
+    encoded = _gzip(json.dumps(manifest, separators=(",", ":")).encode())
+    (out / "manifest.json.gz").write_bytes(encoded)
+    sizes["manifest.json"] = len(encoded)
     return sizes
 
 

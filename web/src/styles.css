@@ -1,0 +1,806 @@
+/*
+ * transitlab console.
+ *
+ * The premise of the project is that distance in a city is measured in
+ * minutes, so the interface is built out of two things: a clock and a map.
+ * Times, route numbers and stop codes are set in a monospace, because that is
+ * what a timetable is set in and because a column of departure times only
+ * reads as a column if the digits line up. Prose is set in a sans. There is
+ * no third voice.
+ *
+ * The time ramp -- mint for the first ten minutes, through ice blue, into deep
+ * blue past half an hour -- is the only accent scale in the page. It colours
+ * the isochrone, the journey's own legs and the interface furniture alike, so
+ * a colour always means the same thing: how long it takes to get there.
+ */
+
+@import "@fontsource/instrument-sans/400.css";
+@import "@fontsource/instrument-sans/500.css";
+@import "@fontsource/instrument-sans/600.css";
+@import "@fontsource/spline-sans-mono/400.css";
+@import "@fontsource/spline-sans-mono/500.css";
+@import "@fontsource/spline-sans-mono/700.css";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+:root {
+  --ink: #0c1114;
+  --ink-deep: #05080a;
+  --ink-raised: #121a1e;
+  --ink-line: #1e292e;
+  --text: #e8f0ee;
+  --muted: #7c8d89;
+  --ice: #7fc8e8;
+  --mint: #5fd6a0;
+
+  /* The ramp, in minutes. */
+  --t0: #5fd6a0;
+  --t10: #7fc8e8;
+  --t20: #4a8fb8;
+  --t30: #2a5570;
+
+  --sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Spline Sans Mono", ui-monospace, "SF Mono", monospace;
+
+  --rail: 384px;
+  --gutter: 22px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ice);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* shell: a flush full-height rail against a full-bleed map           */
+/* ------------------------------------------------------------------ */
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail) 1fr;
+  height: 100%;
+  overflow: hidden;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ink-deep);
+  border-right: 1px solid var(--ink-line);
+}
+
+.rail__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: var(--ink-line) transparent;
+}
+
+.canvas {
+  position: relative;
+  min-width: 0;
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* masthead                                                           */
+/* ------------------------------------------------------------------ */
+.masthead {
+  padding: var(--gutter) var(--gutter) 18px;
+  border-bottom: 1px solid var(--ink-line);
+}
+
+.masthead__name {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.masthead__name span {
+  color: var(--mint);
+}
+
+.masthead__where {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+/* ------------------------------------------------------------------ */
+/* mode switch                                                        */
+/* ------------------------------------------------------------------ */
+.modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--ink-line);
+}
+
+.modes__btn {
+  padding: 13px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.modes__btn:hover {
+  color: var(--text);
+}
+
+.modes__btn[aria-pressed="true"] {
+  color: var(--text);
+  border-bottom-color: var(--ice);
+}
+
+/* ------------------------------------------------------------------ */
+/* query form                                                         */
+/* ------------------------------------------------------------------ */
+.query {
+  padding: 18px var(--gutter);
+  display: grid;
+  gap: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.field__label {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.field__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.control {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  background: var(--ink-raised);
+  font-size: 14px;
+}
+
+.control--mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.control:hover {
+  border-color: #2b3a40;
+}
+
+/* The combobox: 9,948 stops, so a select element is not an option. */
+.combo {
+  position: relative;
+}
+
+.combo__list {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 268px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--ink-raised);
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  box-shadow: 0 18px 40px rgb(0 0 0 / 55%);
+}
+
+.combo__option {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+
+.combo__option[aria-selected="true"] {
+  background: #17262c;
+}
+
+.combo__option b {
+  color: var(--ice);
+  font-weight: 600;
+}
+
+.combo__code {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.combo__empty {
+  padding: 9px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.swap {
+  justify-self: start;
+  padding: 5px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.swap:hover {
+  color: var(--ice);
+}
+
+.go {
+  padding: 11px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--ice);
+  color: #06212e;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.go:hover {
+  background: #96d4ef;
+}
+
+.go:disabled {
+  background: var(--ink-line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------------ */
+/* the result: a duration, then a timetable                           */
+/* ------------------------------------------------------------------ */
+.result {
+  border-top: 1px solid var(--ink-line);
+}
+
+.verdict {
+  padding: 20px var(--gutter) 18px;
+}
+
+.verdict__time {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: clamp(42px, 5.6vw, 60px);
+  font-weight: 700;
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+}
+
+.verdict__time small {
+  font-size: 0.36em;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+  margin-left: 0.22em;
+}
+
+.verdict__shape {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.verdict__clock {
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A real column of departure times. */
+.legs {
+  margin: 0;
+  padding: 0 var(--gutter) 20px;
+  list-style: none;
+}
+
+.leg {
+  display: grid;
+  grid-template-columns: 52px 18px 1fr;
+  gap: 0 10px;
+  align-items: start;
+}
+
+.leg__time {
+  padding-top: 1px;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.leg__time--blank {
+  color: var(--muted);
+}
+
+/* The spine. Drawn with borders rather than SVG so it stays put when the
+   text above it wraps to two lines. */
+.leg__spine {
+  position: relative;
+  justify-self: center;
+  width: 2px;
+  min-height: 42px;
+  height: 100%;
+  background: var(--track, var(--ice));
+}
+
+.leg__spine--walk {
+  width: 0;
+  background: none;
+  border-left: 2px dotted var(--muted);
+}
+
+.leg__spine::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink-deep);
+  border: 2px solid var(--track, var(--ice));
+  transform: translate(-50%, -1px);
+}
+
+.leg__spine--interchange::before {
+  width: 13px;
+  height: 13px;
+  border-width: 3px;
+  border-color: var(--mint);
+}
+
+.leg__body {
+  padding-bottom: 16px;
+}
+
+.leg__stop {
+  display: block;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.leg__detail {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* BMTC route numbers are hard-edged alphanumerics; a plaque is how they are
+   shown on the front of the bus. */
+.plaque {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--track, var(--ice));
+  color: #06212e;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.leg--end .leg__spine {
+  min-height: 0;
+  height: 11px;
+  background: var(--track, var(--ice));
+}
+
+.alts {
+  padding: 0 var(--gutter) 22px;
+}
+
+.alts__head {
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.alt {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alt:hover {
+  border-color: var(--ice);
+}
+
+.alt[aria-pressed="true"] {
+  border-color: var(--ice);
+  background: #10222b;
+}
+
+.alt__time {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.alt__shape {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ */
+/* isochrone: a minute histogram, which is the actual finding          */
+/* ------------------------------------------------------------------ */
+.reach {
+  padding: 20px var(--gutter) 22px;
+  border-top: 1px solid var(--ink-line);
+}
+
+.reach__count {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: clamp(40px, 5.2vw, 56px);
+  font-weight: 700;
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+}
+
+.reach__of {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.bands {
+  margin: 20px 0 0;
+  display: grid;
+  gap: 7px;
+}
+
+.band {
+  display: grid;
+  grid-template-columns: 54px 1fr 46px;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.band__range {
+  color: var(--muted);
+}
+
+.band__bar {
+  height: 9px;
+  border-radius: 1px;
+  background: var(--band, var(--ice));
+  min-width: 1px;
+}
+
+.band__n {
+  text-align: right;
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ */
+/* footer: what this page is actually doing                            */
+/* ------------------------------------------------------------------ */
+.ledger {
+  padding: 13px var(--gutter);
+  border-top: 1px solid var(--ink-line);
+  background: var(--ink-deep);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ledger a {
+  color: var(--ice);
+  text-decoration: none;
+  border-bottom: 1px solid #2b4c5c;
+}
+
+.ledger a:hover {
+  border-bottom-color: var(--ice);
+}
+
+.ledger__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.ledger__row > span {
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* map furniture                                                       */
+/* ------------------------------------------------------------------ */
+.legend {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2;
+  padding: 11px 13px;
+  background: rgb(5 8 10 / 88%);
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  backdrop-filter: blur(6px);
+}
+
+.legend__title {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legend__scale {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.legend__step {
+  width: 34px;
+}
+
+.legend__swatch {
+  height: 7px;
+  border-radius: 1px;
+}
+
+.legend__tick {
+  margin-top: 5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.maplibregl-popup-content {
+  padding: 8px 11px;
+  background: var(--ink-raised);
+  border: 1px solid var(--ink-line);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 55%);
+}
+
+.maplibregl-popup-content strong {
+  display: block;
+  font-weight: 600;
+}
+
+.maplibregl-popup-content em {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.maplibregl-popup-tip {
+  display: none;
+}
+
+.maplibregl-ctrl-group {
+  background: var(--ink-raised) !important;
+  border: 1px solid var(--ink-line) !important;
+  border-radius: 3px !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--ink-line) !important;
+}
+
+.maplibregl-ctrl-group button span {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgb(5 8 10 / 82%) !important;
+  font-family: var(--sans);
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--muted) !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* the download, which is a real moment and gets the one animation     */
+/* ------------------------------------------------------------------ */
+.boot {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  padding: 24px;
+  background: var(--ink);
+}
+
+.boot__inner {
+  width: min(430px, 100%);
+}
+
+.boot__name {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.boot__name span {
+  color: var(--mint);
+}
+
+.boot__what {
+  margin: 10px 0 24px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.boot__meter {
+  height: 3px;
+  background: var(--ink-line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.boot__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--mint), var(--ice));
+  transition: width 0.18s linear;
+}
+
+.boot__read {
+  margin: 10px 0 0;
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.boot__error {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #5c2b2b;
+  border-radius: 3px;
+  background: #1b1113;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.boot__error code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ice);
+}
+
+/* ------------------------------------------------------------------ */
+/* narrow screens: the map stops being the hero and the rail scrolls   */
+/* ------------------------------------------------------------------ */
+@media (max-width: 860px) {
+  :root {
+    --gutter: 16px;
+  }
+
+  /* The page scrolls, not the rail. Keeping the rail's own scroll area here
+     pins the footer to the viewport and the form runs underneath it. */
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 46vh auto;
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+  }
+
+  .canvas {
+    order: -1;
+    min-height: 46vh;
+  }
+
+  .rail {
+    display: block;
+    border-right: 0;
+    border-top: 1px solid var(--ink-line);
+    overflow: visible;
+  }
+
+  .rail__scroll {
+    overflow: visible;
+    min-height: 0;
+  }
+}

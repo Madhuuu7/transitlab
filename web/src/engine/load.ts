@@ -78,7 +78,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 export interface LoadedFeed {
   timetable: Timetable;
   manifest: BundleManifest;
-  /** Compressed bytes actually transferred, for the console to report. */
+  /** Compressed size of the bundle, as recorded by the build. */
   transferred: number;
   /** Milliseconds from the first request to a routable timetable. */
   elapsedMs: number;
@@ -123,10 +123,17 @@ export async function loadFeed(
   ) as ArrayBuffer;
   const timetable = decodeBundle(manifest, buffer, strings);
 
+  // What the build says it wrote, not what this run happened to observe.
+  // Falls back to the observed figure for a bundle built before the manifest
+  // carried sizes.
+  const declared = manifest.download
+    ? Object.values(manifest.download).reduce((total, size) => total + size, 0)
+    : transferred;
+
   return {
     timetable,
     manifest,
-    transferred,
+    transferred: declared,
     elapsedMs: performance.now() - started,
   };
 }

@@ -34,6 +34,15 @@ export interface BundleManifest {
     footpaths: number;
   };
   arrays: ArraySpec[];
+  /**
+   * Compressed size of each file, recorded by the build.
+   *
+   * The console reports its own download from this rather than from what it
+   * observed, because a host that sets `Content-Encoding: gzip` on a `.gz`
+   * file has the browser inflate it before any code can count it -- the
+   * figure would then describe the host instead of the feed.
+   */
+  download?: Record<string, number>;
 }
 
 export interface BundleStrings {

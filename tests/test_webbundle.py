@@ -273,3 +273,20 @@ def test_rebuilding_the_same_timetable_writes_the_same_bytes(tmp_path) -> None:
     write(encode(original, "test"), second)
     for name in ("manifest.json.gz", "timetable.bin.gz", "strings.json.gz"):
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
+
+
+def test_the_manifest_records_what_the_console_will_download(tmp_path) -> None:
+    """The page states its own download size, so the build must know it.
+
+    Measuring it in the browser is what does not work: a host that sets
+    Content-Encoding on a .gz file has the browser inflate it first, and the
+    number on the page then describes the host rather than the feed.
+    """
+    sizes = write(encode(small_random_timetable(12), "test"), tmp_path)
+    manifest = json.loads(gzip.decompress((tmp_path / "manifest.json.gz").read_bytes()))
+    assert manifest["download"] == {
+        "timetable.bin": sizes["timetable.bin"],
+        "strings.json": sizes["strings.json"],
+    }
+    for name, size in manifest["download"].items():
+        assert (tmp_path / f"{name}.gz").stat().st_size == size
